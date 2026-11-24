@@ -1038,6 +1038,13 @@ window.saveBatchOfferings = async function(entries, deletedIds = []) {
         continue;
       }
     }
+    let receiptData = item.receipt || '';
+    if (!receiptData && item.receiptFile && item.receiptFile.size && typeof window.compressReceiptImage === 'function') {
+      try {
+        const comp = await window.compressReceiptImage(item.receiptFile);
+        receiptData = comp.dataUrl || '';
+      } catch {}
+    }
     const newId = uid();
     S.transactions.push({
       id: newId,
@@ -1050,7 +1057,7 @@ window.saveBatchOfferings = async function(entries, deletedIds = []) {
       memberId: item.memberId || '',
       notes,
       status: 'approved',
-      receipt: '',
+      receipt: receiptData,
       createdAt: new Date().toISOString(),
       log: [`Created via Monthly Offerings on ${new Date().toLocaleString()}`]
     });
@@ -1511,9 +1518,27 @@ function txForm(type) {
     <label>Amount<input type="number" name="amount" min="0.01" step="0.01" required></label>
     <label>Category<select name="category">${cats}</select>${type === 'income' ? fundSelectorHtml : ''}</label>
     <label>Event<select name="eventId">${evs}</select></label>
-    ${type === 'income' ? `<label>Member (for dues/contributions)<select name="memberId">${mems}</select></label>` : `<label>Receipt (image)<input type="file" name="receipt" accept="image/*"></label>`}
+    ${type === 'income' ? `<label>Member (for dues/contributions)<select name="memberId">${mems}</select></label>` : `<label>Receipt photo (optional — camera or gallery)
+      <div class="rcpt-upload-box">
+        <input type="file" name="receipt" id="tx-receipt-input" accept="image/*">
+        <div id="tx-receipt-preview" class="rcpt-preview-wrap" style="display:none"></div>
+      </div>
+    </label>`}
     <label>Notes<textarea name="notes" rows="2" placeholder="Description or details..."></textarea></label>
     <div class="row"><button type="button" class="btn ghost" onclick="closeModal()">Cancel</button><button class="btn">Save</button></div></form>`);
+
+  const rcptInp = $('#tx-receipt-input');
+  if (rcptInp) {
+    rcptInp.addEventListener('change', () => {
+      const prev = $('#tx-receipt-preview');
+      const file = rcptInp.files && rcptInp.files[0];
+      if (!prev) return;
+      if (!file) { prev.style.display = 'none'; prev.innerHTML = ''; return; }
+      const url = URL.createObjectURL(file);
+      prev.style.display = 'flex';
+      prev.innerHTML = `<img src="${url}" alt="Receipt preview"><div class="rcpt-prev-meta"><b>${esc(file.name)}</b><span class="mute">${(file.size / 1024).toFixed(0)} KB · ready to upload</span></div>`;
+    });
+  }
 
   const updateFundUi = () => {
     const form = $('#tx-form');
@@ -1568,8 +1593,12 @@ function txForm(type) {
     const t = { id: uid(), type, fund, date: dateVal, amount: +f.get('amount'), category: f.get('category'), eventId: f.get('eventId') || '',
       memberId: f.get('memberId') || '', notes, status: 'approved', receipt: '', log: [`Created ${new Date().toLocaleString()}`] };
     const file = f.get('receipt');
-    if (file && file.size) t.receipt = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(file); });
+    if (file && file.size) {
+      const comp = await window.compressReceiptImage(file);
+      t.receipt = comp.dataUrl;
+    }
     S.transactions.push(t); closeModal(); save();
+    if (t.receipt && typeof showToast === 'function') showToast('🧾 Expense & receipt saved');
   };
 }
 
@@ -1620,7 +1649,148 @@ function catForm() {
     closeModal(); save();
   };
 }
-function showReceipt(id) { const t = S.transactions.find(x => x.id === id); openModal(`<h2>Receipt</h2><img src="${t.receipt}" style="width:100%;border-radius:12px"><br><br><button class="btn ghost" onclick="closeModal()">Close</button>`); }
+/* ---------- receipt helpers (compress, pick, view, attach, remove) ---------- */
+window.compressReceiptImage = async function(file, maxDim = 1400, quality = 0.82) {
+  const readAsDataUrl = f => new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(f);
+  });
+  if (!file || !file.type || !file.type.startsWith('image/')) {
+    const dataUrl = await readAsDataUrl(file);
+    return { blob: file, dataUrl, contentType: file.type || 'application/octet-stream', ext: (file.name.split('.').pop() || 'bin').toLowerCase() };
+  }
+  try {
+    const objUrl = URL.createObjectURL(file);
+    const img = await new Promise((res, rej) => {
+      const im = new Image();
+      im.onload = () => res(im);
+      im.onerror = rej;
+      im.src = objUrl;
+    });
+    URL.revokeObjectURL(objUrl);
+    let w = img.naturalWidth || img.width;
+    let h = img.naturalHeight || img.height;
+    if (w > maxDim || h > maxDim) {
+      const ratio = Math.min(maxDim / w, maxDim / h);
+      w = Math.max(1, Math.round(w * ratio));
+      h = Math.max(1, Math.round(h * ratio));
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    const blob = await new Promise(res => canvas.toBlob(b => res(b), 'image/jpeg', quality));
+    if (blob && blob.size) {
+      return { blob, dataUrl, contentType: 'image/jpeg', ext: 'jpg' };
+    }
+  } catch (err) {
+    console.warn('Receipt compression fallback:', err);
+  }
+  const dataUrl = await readAsDataUrl(file);
+  const ext = (file.name && file.name.includes('.') ? file.name.split('.').pop() : 'jpg').toLowerCase();
+  return { blob: file, dataUrl, contentType: file.type || 'image/jpeg', ext };
+};
+
+window.pickReceiptFile = function() {
+  return new Promise(resolve => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = 'image/*';
+    inp.style.display = 'none';
+    document.body.appendChild(inp);
+    let settled = false;
+    const finish = file => {
+      if (settled) return;
+      settled = true;
+      inp.remove();
+      resolve(file || null);
+    };
+    inp.addEventListener('change', () => finish(inp.files && inp.files[0]));
+    inp.addEventListener('cancel', () => finish(null));
+    inp.click();
+  });
+};
+
+window.msReceiptPicked = function(inp) {
+  const lbl = inp && inp.closest('.ms-rcpt-pick');
+  if (!lbl) return;
+  const span = lbl.querySelector('span');
+  const file = inp.files && inp.files[0];
+  if (file) {
+    lbl.classList.add('has-file');
+    lbl.title = `Attached: ${file.name}`;
+    if (span) span.textContent = '✅ Receipt';
+  } else {
+    lbl.classList.remove('has-file');
+    lbl.title = 'Attach receipt photo';
+    if (span) span.textContent = '📷 Receipt';
+  }
+};
+
+window.renderReceiptModal = function(t, imgUrl) {
+  const canEdit = typeof sb === 'undefined' || (typeof canAdd === 'function' && canAdd());
+  const isAllow = isAllowanceExp(t) || isAllowanceInc(t);
+  const fundTag = isAllow
+    ? `<span class="fund-badge-pill fund-badge-allowance">💳 Allowance</span>`
+    : `<span class="fund-badge-pill fund-badge-general">🏢 General</span>`;
+  openModal(`
+    <h2>🧾 Expense Receipt</h2>
+    <div class="rcpt-modal-meta">
+      <div><b>${esc(cleanNotes(t.notes) || t.category)}</b> ${fundTag}</div>
+      <div class="mute" style="font-size:12px;margin-top:3px">${t.date} · ${esc(t.category)} · <b class="${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '-'}${money(t.amount)}</b></div>
+    </div>
+    <div class="rcpt-modal-img-wrap">
+      <img src="${imgUrl}" alt="Expense receipt">
+    </div>
+    <div class="row" style="margin-top:14px;flex-wrap:wrap;gap:8px;justify-content:space-between">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a class="btn sm ghost" href="${imgUrl}" target="_blank" rel="noopener" download="receipt-${t.date}.jpg">⬇ Open / Save</a>
+        ${canEdit ? `<button type="button" class="btn sm ghost" onclick="attachReceipt('${t.id}', true)">📷 Replace</button>` : ''}
+        ${canEdit ? `<button type="button" class="btn sm ghost danger" onclick="removeReceipt('${t.id}')">🗑️ Remove</button>` : ''}
+      </div>
+      <button type="button" class="btn ghost" onclick="closeModal()">Close</button>
+    </div>
+  `);
+};
+
+function showReceipt(id) {
+  const t = S.transactions.find(x => x.id === id);
+  if (!t || !t.receipt) { showToast('No receipt attached yet'); return; }
+  window.renderReceiptModal(t, t.receipt);
+}
+
+window.attachReceipt = async function(txId, reopenModal = false) {
+  const t = S.transactions.find(x => x.id === txId);
+  if (!t) return;
+  const file = await window.pickReceiptFile();
+  if (!file) return;
+  showToast('⏳ Processing receipt...');
+  const comp = await window.compressReceiptImage(file);
+  t.receipt = comp.dataUrl;
+  t.log = t.log || [];
+  t.log.push(`Receipt uploaded ${new Date().toLocaleString()}`);
+  save();
+  showToast('🧾 Receipt uploaded!');
+  if (reopenModal) showReceipt(txId);
+};
+
+window.removeReceipt = async function(txId) {
+  const t = S.transactions.find(x => x.id === txId);
+  if (!t || !confirm('Remove the receipt photo from this expense?')) return;
+  t.receipt = '';
+  t.log = t.log || [];
+  t.log.push(`Receipt removed ${new Date().toLocaleString()}`);
+  closeModal();
+  save();
+  showToast('🗑️ Receipt removed');
+};
+
 function showLog(id) { const t = S.transactions.find(x => x.id === id); openModal(`<h2>Edit history</h2>${(t.log || []).map(l => `<p class="mute">${esc(l)}</p>`).join('')}<br><button class="btn ghost" onclick="closeModal()">Close</button>`); }
 
 /* ---------- actions ---------- */
@@ -1768,7 +1938,7 @@ function txRows(list, actions = true, selectable = false) {
       return `<tr style="${isSel ? 'background:rgba(34,211,238,.1)' : ''}">${selectable ? `<td class="c-sel"><input type="checkbox" class="tx-sel-chk" data-id="${t.id}" ${isSel ? 'checked' : ''} onchange="toggleTxSelect('${t.id}',this.checked)" style="width:auto"></td>` : ''}<td class="c-date">${t.date}</td><td class="c-type">${t.type}</td><td class="c-cat"><span class="tag">${esc(t.category)}</span> <span class="mute">${esc(memName(t.memberId) || cleanNotes(t.notes))}</span></td><td class="c-fund">${fundBadge}</td><td class="c-event ${evName(t.eventId) === '—' ? 'is-empty' : ''}">${esc(evName(t.eventId))}</td>
     <td class="c-amt ${t.type === 'income' ? 'pos' : 'neg'}">${t.type === 'income' ? '+' : '-'}${money(t.amount)}</td>
     <td class="c-status"><span class="tag ${t.status === 'void' ? '' : 'ok'}">${t.status === 'void' ? 'void' : 'saved'}</span></td>
-    ${actions ? `<td class="c-act" style="white-space:nowrap">${t.receipt ? `<button class="btn sm ghost" onclick="showReceipt('${t.id}')">🧾</button> ` : ''}<button class="btn sm ghost" onclick="showLog('${t.id}')">🕘</button> <button class="btn sm ghost danger" title="Delete permanently" onclick="deleteSelectedTxs(['${t.id}'])">🗑️</button></td>` : ''}</tr>`;
+    ${actions ? `<td class="c-act" style="white-space:nowrap">${t.receipt ? `<button class="btn sm ghost rcpt-has" title="View receipt" onclick="showReceipt('${t.id}')">🧾</button> ` : (t.type === 'expense' ? `<button class="btn sm ghost rcpt-add" title="Upload receipt photo" onclick="attachReceipt('${t.id}')">📷</button> ` : '')}<button class="btn sm ghost" title="History" onclick="showLog('${t.id}')">🕘</button> <button class="btn sm ghost danger" title="Delete permanently" onclick="deleteSelectedTxs(['${t.id}'])">🗑️</button></td>` : ''}</tr>`;
     }).join('') + '</table>';
 }
 
@@ -1910,27 +2080,33 @@ window.msApplyCarried = async function(ym, amount) {
 
 window.msAddExpense = async function(e) {
   e.preventDefault();
-  const f = new FormData(e.target);
+  const form = e.target;
+  const f = new FormData(form);
   const date = f.get('date');
   const amount = parseMoneyInput(f.get('amount'));
   const category = f.get('category') || 'Other';
   const fund = f.get('fund') || 'general';
   let notes = (f.get('notes') || '').trim() || category;
+  const receiptFile = f.get('receipt');
+  const hasReceipt = receiptFile && receiptFile.size > 0;
   if (!date || isNaN(amount) || amount <= 0) {
     alert('Please enter a valid expense date and amount.');
     return;
   }
-  await window.saveBatchOfferings([{
+  if (hasReceipt) showToast('⏳ Uploading expense & receipt...');
+  const ok = await window.saveBatchOfferings([{
     id: null,
     type: 'expense',
     fund,
     date,
     amount,
     category: fund === 'allowance' && category === 'Other' ? 'Monthly Allowance' : category,
-    notes
+    notes,
+    receiptFile: hasReceipt ? receiptFile : null
   }]);
+  if (ok === false) return;
   activeMonth = date.slice(0, 7);
-  showToast(`✔ Added expense (${money(amount)})`);
+  showToast(hasReceipt ? `🧾 Added expense & receipt (${money(amount)})` : `✔ Added expense (${money(amount)})`);
 };
 
 window.msOpenReport = function(ym) {
@@ -2078,13 +2254,17 @@ const views = {
 
     // Helper for expense row rendering
     const renderExpRow = t => {
+      const rcptBtn = t.receipt
+        ? `<button type="button" class="btn sm ghost rcpt-has" title="View receipt" onclick="showReceipt('${t.id}')">🧾</button>`
+        : (canEdit ? `<button type="button" class="btn sm ghost rcpt-add" title="Upload receipt photo" onclick="attachReceipt('${t.id}')">📷</button>` : '');
       return `<div class="ms-row">
         <div class="ms-row-left">
-          <div class="ms-row-title">${esc(cleanNotes(t.notes) || t.category)}</div>
+          <div class="ms-row-title">${esc(cleanNotes(t.notes) || t.category)} ${t.receipt ? '<span class="ms-status ok" style="font-size:10px;padding:1px 6px">🧾 Receipt</span>' : ''}</div>
           <div class="ms-row-sub">${t.date} · ${esc(t.category)}</div>
         </div>
         <div class="ms-row-right">
           <strong class="neg" style="font-size:15px;font-variant-numeric:tabular-nums">-${money(t.amount)}</strong>
+          ${rcptBtn}
           ${canEdit ? `<button type="button" class="btn sm ghost danger" title="Void expense" onclick="voidTx('${t.id}')">✕</button>` : ''}
         </div>
       </div>`;
@@ -2283,12 +2463,13 @@ const views = {
             ${genExpRowsHtml}
           </div>
           ${canEdit ? `
-            <form class="ms-add-exp" style="grid-template-columns:130px 1fr 130px 125px auto" onsubmit="msAddExpense(event)">
+            <form class="ms-add-exp ms-add-exp-gen" style="grid-template-columns:130px 1fr 120px 115px auto auto" onsubmit="msAddExpense(event)">
               <input type="hidden" name="fund" value="general">
               <input type="date" name="date" value="${defaultExpDate}" required title="Expense date">
               <input type="text" name="notes" placeholder="General expense (e.g. Pastor Appreciation, Snacks)">
               <select name="category" title="Category">${expCatOpts}</select>
               <input type="text" inputmode="decimal" name="amount" placeholder="${esc(S.currency)} Amount" required autocomplete="off">
+              <label class="ms-rcpt-pick" title="Attach receipt photo"><input type="file" name="receipt" accept="image/*" onchange="msReceiptPicked(this)"><span>📷 Receipt</span></label>
               <button class="btn sm alt" style="padding:8px 14px">+ Add</button>
             </form>
           ` : ''}
@@ -2350,12 +2531,13 @@ const views = {
             ${allowExpRowsHtml}
           </div>
           ${canEdit ? `
-            <form class="ms-add-exp" style="grid-template-columns:130px 1fr 125px auto;background:rgba(34,211,238,.06);border-color:rgba(34,211,238,.35)" onsubmit="msAddExpense(event)">
+            <form class="ms-add-exp ms-add-exp-allow" style="grid-template-columns:130px 1fr 120px auto auto;background:rgba(34,211,238,.06);border-color:rgba(34,211,238,.35)" onsubmit="msAddExpense(event)">
               <input type="hidden" name="fund" value="allowance">
               <input type="hidden" name="category" value="Monthly Allowance">
               <input type="date" name="date" value="${defaultExpDate}" required title="Allowance expense date">
               <input type="text" name="notes" placeholder="Allowance expense (e.g. Pansit, Rice, Joint Lunch)">
               <input type="text" inputmode="decimal" name="amount" placeholder="${esc(S.currency)} Amount" required autocomplete="off">
+              <label class="ms-rcpt-pick" title="Attach receipt photo"><input type="file" name="receipt" accept="image/*" onchange="msReceiptPicked(this)"><span>📷 Receipt</span></label>
               <button class="btn sm" style="background:linear-gradient(135deg,#06b6d4,#3b82f6);padding:8px 14px">+ Spend</button>
             </form>
           ` : ''}

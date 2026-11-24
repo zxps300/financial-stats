@@ -123,6 +123,27 @@ const audit = (txId, action) => sb.from('audit_log').insert({ tx_id: txId, actio
 const check = r => { if (r.error) throw r.error; return r.data; };
 const busy = (form, on) => form.querySelectorAll('button').forEach(b => b.disabled = on);
 
+/* ---------- receipt storage helper (compress + upload to Supabase Storage) ---------- */
+async function uploadReceiptFile(file) {
+  const comp = typeof window.compressReceiptImage === 'function'
+    ? await window.compressReceiptImage(file)
+    : { blob: file, contentType: file.type || 'image/jpeg', ext: (file.name.split('.').pop() || 'jpg').toLowerCase() };
+  const safeBase = (file.name || 'receipt').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_').slice(0, 40) || 'receipt';
+  const path = `${me.id}/${Date.now()}-${safeBase}.${comp.ext || 'jpg'}`;
+  const res = await sb.storage.from('receipts').upload(path, comp.blob, {
+    contentType: comp.contentType || 'image/jpeg',
+    upsert: true
+  });
+  if (res.error) {
+    const msg = res.error.message || String(res.error);
+    if (/bucket|not found|row-level security|policy/i.test(msg)) {
+      throw new Error(`Receipt storage isn't enabled in Supabase yet (${msg}). Run supabase-lock-owner.sql in Supabase SQL Editor to enable the 'receipts' bucket.`);
+    }
+    throw res.error;
+  }
+  return path;
+}
+
 /* ---------- forms (reuse the core modals, replace the save step) ---------- */
 const coreTxForm = txForm, coreEventForm = eventForm, coreMemberForm = memberForm, coreCatForm = catForm;
 txForm = type => {
@@ -132,8 +153,8 @@ txForm = type => {
     try {
       let path = null; const file = f.get('receipt');
       if (file && file.size) {
-        path = `${me.id}/${Date.now()}-${file.name.replace(/[^\w.-]/g, '_')}`;
-        check(await sb.storage.from('receipts').upload(path, file));
+        if (typeof showToast === 'function') showToast('⏳ Uploading receipt...');
+        path = await uploadReceiptFile(file);
       }
       const fund = f.get('fund') || (type === 'expense' ? 'general' : 'general');
       let notes = f.get('notes') ? f.get('notes').trim() : '';
@@ -144,8 +165,9 @@ txForm = type => {
         type, date: f.get('date'), amount: +f.get('amount'), category: f.get('category'), event_id: f.get('eventId') || null,
         member_id: f.get('memberId') || null, notes, receipt_path: path, status: 'approved'
       }).select('id').single());
-      await audit(row.id, 'Entered');
+      await audit(row.id, path ? 'Entered with receipt' : 'Entered');
       closeModal(); await refresh();
+      if (path && typeof showToast === 'function') showToast('🧾 Expense & receipt saved!');
     } catch (err) { fail(err); busy(form, false); }
   };
 };
@@ -221,13 +243,18 @@ window.saveBatchOfferings = async (entries, deletedIds = []) => {
       }).eq('id', u.id));
     }
     if (toInsert.length) {
-      const rows = toInsert.map(item => {
+      const rows = [];
+      for (const item of toInsert) {
         let notes = item.notes || '';
         if (item.fund === 'allowance' && !notes.includes('[Allowance]')) {
           notes = notes ? `[Allowance] ${notes}` : '[Allowance]';
         }
         const txType = item.type || 'income';
-        return {
+        let receiptPath = null;
+        if (item.receiptFile && item.receiptFile.size) {
+          receiptPath = await uploadReceiptFile(item.receiptFile);
+        }
+        rows.push({
           type: txType,
           date: item.date,
           amount: item.amount,
@@ -235,9 +262,10 @@ window.saveBatchOfferings = async (entries, deletedIds = []) => {
           event_id: null,
           member_id: null,
           notes,
+          receipt_path: receiptPath,
           status: 'approved'
-        };
-      });
+        });
+      }
       const inserted = check(await sb.from('transactions').insert(rows).select('id'));
       if (inserted && inserted.length && typeof window.recordUploadBatch === 'function') {
         window.recordUploadBatch(inserted.map(r => r.id), `Upload (${inserted.length})`);
@@ -249,9 +277,11 @@ window.saveBatchOfferings = async (entries, deletedIds = []) => {
     await audit(null, `Saved monthly transactions (${entries.length} items)`);
     closeModal();
     await refresh();
+    return true;
   } catch (err) {
     fail(err);
     if (form) busy(form, false);
+    return false;
   }
 };
 eventForm = id => {
@@ -353,9 +383,56 @@ delMember = async id => {
 };
 showReceipt = async id => {
   const t = S.transactions.find(x => x.id === id);
-  const { data, error } = await sb.storage.from('receipts').createSignedUrl(t.receipt, 300);
+  if (!t || !t.receipt) {
+    if (typeof showToast === 'function') showToast('No receipt attached yet');
+    return;
+  }
+  if (String(t.receipt).startsWith('data:') || String(t.receipt).startsWith('http')) {
+    return window.renderReceiptModal(t, t.receipt);
+  }
+  const { data, error } = await sb.storage.from('receipts').createSignedUrl(t.receipt, 600);
   if (error) return fail(error);
-  openModal(`<h2>Receipt</h2><img src="${data.signedUrl}" style="width:100%;border-radius:12px"><br><br><button class="btn ghost" onclick="closeModal()">Close</button>`);
+  window.renderReceiptModal(t, data.signedUrl);
+};
+
+window.attachReceipt = async function(txId, reopenModal = false) {
+  const t = S.transactions.find(x => x.id === txId);
+  if (!t) return;
+  const file = await window.pickReceiptFile();
+  if (!file) return;
+  try {
+    if (typeof showToast === 'function') showToast('⏳ Uploading receipt...');
+    const oldPath = t.receipt && !String(t.receipt).startsWith('data:') ? t.receipt : null;
+    const path = await uploadReceiptFile(file);
+    check(await sb.from('transactions').update({ receipt_path: path }).eq('id', txId));
+    if (oldPath && oldPath !== path) {
+      await sb.storage.from('receipts').remove([oldPath]).catch(() => {});
+    }
+    await audit(txId, oldPath ? 'Replaced receipt' : 'Uploaded receipt');
+    await refresh();
+    if (typeof showToast === 'function') showToast('🧾 Receipt uploaded!');
+    if (reopenModal) showReceipt(txId);
+  } catch (err) {
+    fail(err);
+  }
+};
+
+window.removeReceipt = async function(txId) {
+  const t = S.transactions.find(x => x.id === txId);
+  if (!t || !confirm('Remove the receipt photo from this expense?')) return;
+  try {
+    const oldPath = t.receipt && !String(t.receipt).startsWith('data:') ? t.receipt : null;
+    check(await sb.from('transactions').update({ receipt_path: null }).eq('id', txId));
+    if (oldPath) {
+      await sb.storage.from('receipts').remove([oldPath]).catch(() => {});
+    }
+    await audit(txId, 'Removed receipt');
+    closeModal();
+    await refresh();
+    if (typeof showToast === 'function') showToast('🗑️ Receipt removed');
+  } catch (err) {
+    fail(err);
+  }
 };
 async function setRole(id, role) {
   try {
