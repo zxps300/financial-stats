@@ -65,20 +65,291 @@
       <div class="row" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`);
   };
 
-  /* ---------- Excel export (opens in Excel) ---------- */
-  window.exportExcel = function () {
-    const stats = monthStats(), tx = live().sort((a, b) => a.date.localeCompare(b.date));
-    const keys = Object.keys(stats).sort();
-    if (!keys.length) return alert('No transactions to export yet.');
-    const e = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-    let h = `<html><head><meta charset="utf-8"></head><body><h2>Tagbilaran Bible Training Ministries, Inc.</h2><h3>COYAP Cash Accountability Report</h3>`;
-    h += `<table border="1"><tr><th>Month</th><th>Beginning</th><th>Offerings</th><th>Expenses</th><th>Net Cash on Hand</th><th>Allowance Allocated</th><th>Allowance Spent</th><th>Allowance Left</th></tr>` +
-      keys.map(k => { const s = stats[k]; return `<tr><td>${monthName(k)}</td><td>${s.begin}</td><td>${s.offer}</td><td>${s.genExp}</td><td>${s.net}</td><td>${s.alloc}</td><td>${s.allowExp}</td><td>${s.allowLeft}</td></tr>`; }).join('') + '</table><br>';
-    keys.forEach(k => {
-      h += `<h3>${monthName(k)}</h3><table border="1"><tr><th>Date</th><th>Type</th><th>Fund</th><th>Category</th><th>Notes</th><th>Amount</th></tr>` +
-        tx.filter(t => ymOf(t.date) === k).map(t => `<tr><td>${t.date}</td><td>${t.type}</td><td>${(isAllowanceInc(t) || isAllowanceExp(t)) ? 'Allowance' : 'General'}</td><td>${e(t.category)}</td><td>${e(cleanNotes(t.notes))}</td><td>${t.type === 'expense' ? '-' : ''}${t.amount}</td></tr>`).join('') + '</table><br>';
+  /* ---------- Excel export (.xlsx matching on-screen Reports 1-to-1) ---------- */
+  function buildMonthlySheetRows(ym) {
+    const r = typeof window.getMonthlyReportData === 'function' ? window.getMonthlyReportData(ym) : null;
+    if (!r) return null;
+    const rows = [
+      ['Tagbilaran Bible Training Ministries, Inc.', '', '', ''],
+      ['BIBLE TRAINING CENTER - TAGBILARAN CHURCH', '', '', ''],
+      ['College, Youth and Professionals (COYAP)', '', '', ''],
+      ['Cash Accountability Report', '', '', ''],
+      [`As of ${r.monthTitle}`, '', '', ''],
+      ['In Philippine Peso', '', '', ''],
+      ['', '', '', ''],
+      ['PARTICULARS', 'DETAIL', 'SUBTOTAL', 'TOTAL'],
+      ['Cash on Hand - Beginning Balance', '', '', ''],
+      ['  Youth Funds from Church', '', '', ''],
+      ['  Youth Night Offerings', '', 0, ''],
+      ['  Beginning Balance Total', '', '', r.begBal],
+      ['', '', '', ''],
+      ['Add: Offerings', '', '', ''],
+      ['  Youth Night Offerings', '', '', '']
+    ];
+    r.ynSlotRows.forEach(s => {
+      rows.push([
+        `    ${s.label}${s.reason ? ` (${s.reason})` : ''}`,
+        s.amount != null ? s.amount : '—',
+        '',
+        ''
+      ]);
     });
-    download(`BTC-Youth-Report-${new Date().toISOString().slice(0, 10)}.xls`, h + '</body></html>', 'application/vnd.ms-excel');
+    rows.push(['  Subtotal Youth Night Offerings', '', r.totalYN, '']);
+    rows.push([
+      `  Joint Fellowship Offerings${r.jfSkipReason ? ` (${r.jfSkipReason})` : ''}`,
+      '',
+      r.totalJF ? r.totalJF : '—',
+      r.totalOfferings
+    ]);
+    r.otherInc.forEach(t => {
+      rows.push([`  ${t.category} (${t.date})`, '', t.amount, '']);
+    });
+    rows.push(['Total Cash on Hand (Youth General Fund)', '', '', r.totalCashOnHand]);
+    rows.push(['', '', '', '']);
+    rows.push(['Less: Expenses (Youth General Fund)', '', '', '']);
+    if (r.genExpList.length) {
+      r.genExpList.forEach(t => {
+        const noteStr = cleanNotes(t.notes);
+        const rcpt = t.receipt ? ' [Receipt]' : '';
+        rows.push([`    ${t.category} (${t.date}${noteStr ? ' · ' + noteStr : ''})${rcpt}`, t.amount, '', '']);
+      });
+    } else {
+      rows.push(['    None recorded', 0, '', '']);
+    }
+    rows.push(['  Total General Fund Expenses', '', '', -r.totalGenExp]);
+    rows.push(['NET CASH ON HAND (YOUTH GENERAL FUND)', '', '', r.netCashOnHand]);
+    rows.push(['', '', '', '']);
+    rows.push(['SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)', '', '', '']);
+    rows.push([`Allocation from Church Funds (${r.monthTitle})`, '', '', r.allow.allocated]);
+    rows.push(['Less: Allowance Expenses', '', '', '']);
+    if (r.allowExpList.length) {
+      r.allowExpList.forEach(t => {
+        const noteStr = cleanNotes(t.notes);
+        const rcpt = t.receipt ? ' [Receipt]' : '';
+        rows.push([`    ${t.category} (Allowance · ${t.date}${noteStr ? ' · ' + noteStr : ''})${rcpt}`, t.amount, '', '']);
+      });
+    } else {
+      rows.push(['    None recorded', 0, '', '']);
+    }
+    rows.push(['  Total Allowance Expenses', '', '', -r.allow.spent]);
+    rows.push([`REMAINING ALLOWANCE BALANCE (${r.monthTitle.toUpperCase()})`, '', '', r.allow.remaining]);
+    rows.push([`${r.y} Cumulative Remaining Allowance`, '', '', r.yearAllow.remaining]);
+    rows.push(['Reference Combined Cash (Youth Fund + Monthly Allowance Left)', '', '', r.combinedCash]);
+    rows.push(['', '', '', '']);
+    rows.push(['Prepared by:', r.sig.preparedName, 'Noted:', r.sig.notedName]);
+    rows.push(['', r.sig.preparedTitle, '', r.sig.notedTitle]);
+    rows.push(['', '', '', '']);
+    rows.push(['Recommending Approval:', r.sig.recommendingName, 'Approved by:', r.sig.approvedName]);
+    rows.push(['', r.sig.recommendingTitle, '', r.sig.approvedTitle]);
+    return { r, rows };
+  }
+
+  function buildAnnualSheetRows(selYear) {
+    const annual = getAnnualBreakdown(selYear);
+    const sig = getSignatories();
+    const includeAdj = annual.showAdj || Math.abs(annual.totalAdjustments) > 0.005;
+    const hdr = ['Month', 'Beg. Youth Fund', 'Friday Offerings', 'Joint Fellowship', 'Youth Inflow', 'General Exp.', 'Youth Fund Net'];
+    if (includeAdj) hdr.push('Adjustment');
+    hdr.push('Ending Youth Fund', 'Allowance In', 'Allowance Out', 'Balance', 'Remaining');
+    const colCount = hdr.length;
+    const pad = arr => { while (arr.length < colCount) arr.push(''); return arr; };
+
+    const rows = [
+      pad(['Tagbilaran Bible Training Ministries, Inc.']),
+      pad(['BIBLE TRAINING CENTER - TAGBILARAN CHURCH']),
+      pad(['College, Youth and Professionals (COYAP)']),
+      pad(['ANNUAL FINANCIAL ACCOUNTABILITY & NET SUMMARY']),
+      pad([`For the Calendar Year ${selYear}`]),
+      pad(['In Philippine Peso (PHP) · Youth General Fund & Church Allowance Separated']),
+      pad([]),
+      pad(['KEY METRICS', 'Youth Offerings Inflow', annual.totalInflowYear, 'General Fund Expenses', annual.totalExpensesYear, 'TOTAL NET OF THE YEAR', annual.totalNetOfYear, 'Closing Balance', annual.finalEndingCash, 'Remaining Allowance', annual.allowanceLeftYear]),
+      pad([]),
+      hdr
+    ];
+
+    annual.months.forEach(m => {
+      const row = [
+        m.fullName + (m.flagged ? ' ⚠' : ''),
+        m.begCash,
+        m.fridayOfferings,
+        m.jointFellowship,
+        m.totalInflow,
+        m.generalExpenses ? -m.generalExpenses : 0,
+        m.monthlyNet
+      ];
+      if (includeAdj) row.push(m.adjustment || 0);
+      row.push(
+        m.endingCash,
+        m.allowanceIn,
+        m.allowanceSpentRaw == null ? '' : Number(m.allowanceSpentRaw),
+        m.allowanceLeft == null ? '—' : m.allowanceLeft,
+        m.allowanceRemaining
+      );
+      rows.push(row);
+    });
+
+    const totRow = [
+      `TOTAL FOR ${selYear}`,
+      annual.openingBalance,
+      annual.totalFriday,
+      annual.totalJF,
+      annual.totalInflowYear,
+      annual.totalGeneralExpenses ? -annual.totalGeneralExpenses : 0,
+      annual.totalNetOfYear
+    ];
+    if (includeAdj) totRow.push(annual.totalAdjustments);
+    totRow.push(
+      annual.finalEndingCash,
+      annual.totalAllocIn,
+      annual.totalAllowanceSpent,
+      annual.allowanceLeftYear,
+      annual.allowanceLeftYear
+    );
+    rows.push(totRow);
+
+    if (!annual.check.ok) {
+      rows.push(pad([]));
+      rows.push(pad([`CHECK FAILED: Closing balance ${peso(annual.check.closing)} != Opening ${peso(annual.openingBalance)} + Net ${peso(annual.totalNetOfYear)} + Adjustments ${peso(annual.totalAdjustments)} = ${peso(annual.check.expectedClosing)}`]));
+    }
+
+    if (annual.flags.length) {
+      rows.push(pad([]));
+      rows.push(pad([`Flagged Months — Expenses above 2× Average Monthly Expense (Avg ${peso(annual.avgExpense)}, Threshold ${peso(annual.flagThreshold)})`]));
+      rows.push(pad(['Month', 'Expenses', 'Note / Category']));
+      annual.flags.forEach(f => {
+        const mObj = annual.months.find(m => m.ym === f.ym) || {};
+        rows.push(pad([f.month, f.expenses, mObj.note || '']));
+      });
+    }
+
+    if (annual.spentUnsupported) {
+      rows.push(pad([]));
+      rows.push(pad([`WARNING: Monthly breakdown missing – total spent ${peso(annual.allowanceTotals.totalSpent)} is unsupported by monthly data.`]));
+    }
+
+    if (annual.reportedAny) {
+      rows.push(pad([]));
+      rows.push(pad(['Reconciliation — Reported vs Computed Beginning Balances']));
+      if (annual.recon.length) {
+        rows.push(pad(['Month', 'Reported Beginning', 'Expected', 'Difference']));
+        annual.recon.forEach(r => rows.push(pad([r.month, r.reported, r.expected, r.diff])));
+        rows.push(pad(['Total Difference', '', '', annual.reconSummary.total]));
+      } else {
+        rows.push(pad(['Reported beginning balances agree with the computed chain.']));
+      }
+      rows.push(pad(['Documented Adjustments', annual.reconSummary.adjustments, 'Total Unexplained Difference', annual.reconSummary.unexplained]));
+    }
+
+    rows.push(pad([]));
+    rows.push(pad(['Annual Net Cash Accountability', 'Amount', '', 'Monthly Allowance Status', 'Amount']));
+    rows.push(pad(['Opening Balance', annual.openingBalance, '', 'Allowance Allocated / Received', annual.totalAllocIn]));
+    rows.push(pad([`Total Inflows for ${selYear}`, annual.totalInflowYear, '', 'Allowance Disbursed / Spent', annual.totalAllowanceSpent ? -annual.totalAllowanceSpent : 0]));
+    rows.push(pad([`Total Expenses for ${selYear}`, annual.totalExpensesYear ? -annual.totalExpensesYear : 0, '', 'ALLOWANCE REMAINING LEFT', annual.allowanceLeftYear]));
+    rows.push(pad(['TOTAL NET OF THE YEAR', annual.totalNetOfYear, '', annual.reportedTotalSpent != null ? 'Reported Total Spent' : '', annual.reportedTotalSpent != null ? annual.reportedTotalSpent : '']));
+    rows.push(pad(['Closing Balance', annual.finalEndingCash]));
+    rows.push(pad([]));
+    rows.push(pad(['Prepared by:', sig.preparedName, '', 'Noted:', sig.notedName]));
+    rows.push(pad(['', sig.preparedTitle, '', '', sig.notedTitle]));
+    rows.push(pad([]));
+    rows.push(pad(['Recommending Approval:', sig.recommendingName, '', 'Approved by:', sig.approvedName]));
+    rows.push(pad(['', sig.recommendingTitle, '', '', sig.approvedTitle]));
+
+    return { annual, rows, colCount };
+  }
+
+  function makeXlsxSheet(aoa, colWidths, mergeHeaderCols) {
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = colWidths.map(w => ({ wch: w }));
+    if (mergeHeaderCols > 1) {
+      ws['!merges'] = [0, 1, 2, 3, 4, 5].map(r => ({ s: { r, c: 0 }, e: { r, c: mergeHeaderCols - 1 } }));
+    }
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let R = range.s.r; R <= range.e.r; R++) {
+      for (let C = range.s.c; C <= range.e.c; C++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
+        if (cell && cell.t === 'n') cell.z = '#,##0.00';
+      }
+    }
+    return ws;
+  }
+
+  function txSheetRows(txList) {
+    return [
+      ['Date', 'Type', 'Fund', 'Category', 'Notes', 'Amount', 'Receipt'],
+      ...txList.map(t => [
+        t.date,
+        t.type,
+        (isAllowanceInc(t) || isAllowanceExp(t)) ? 'Allowance' : 'General',
+        t.category || '',
+        cleanNotes(t.notes || ''),
+        t.type === 'expense' ? -Number(t.amount) : Number(t.amount),
+        t.receipt ? 'Yes' : ''
+      ])
+    ];
+  }
+
+  function exportHtmlXlsFallback(filename, sheets) {
+    const e = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    let h = `<html><head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:12px}table{border-collapse:collapse;margin-bottom:20px}td,th{border:1px solid #d1d5db;padding:4px 8px}td.num{text-align:right;mso-number-format:"#,##0.00"}</style></head><body>`;
+    sheets.forEach(s => {
+      h += `<h3>${e(s.name)}</h3><table>` + s.rows.map(row =>
+        '<tr>' + row.map(v => typeof v === 'number'
+          ? `<td class="num">${v.toFixed(2)}</td>`
+          : `<td>${e(v)}</td>`
+        ).join('') + '</tr>'
+      ).join('') + '</table>';
+    });
+    download(filename.replace(/\.xlsx$/i, '.xls'), h + '</body></html>', 'application/vnd.ms-excel');
+  }
+
+  window.exportExcel = function (opts) {
+    const allLive = live().sort((a, b) => a.date.localeCompare(b.date));
+    const curYear = String(new Date().getFullYear());
+    const years = [...new Set([...allLive.map(t => t.date.slice(0, 4)), curYear])].sort().reverse();
+    const activeMode = (opts && opts.mode) || (typeof view !== 'undefined' && view === 'reports' && typeof reportMode !== 'undefined' ? reportMode : 'annual');
+    const selYear = (opts && opts.year) || (typeof reportYear !== 'undefined' && reportYear) || years[0] || curYear;
+    const selYm = (opts && opts.ym) || (typeof reportMonth !== 'undefined' && reportMonth) || (typeof getActiveMonth === 'function' ? getActiveMonth() : `${selYear}-01`);
+
+    const sheets = [];
+    let filename = '';
+
+    if (activeMode === 'monthly') {
+      const mData = buildMonthlySheetRows(selYm);
+      if (!mData) return alert('Could not build monthly report.');
+      sheets.push({ name: mData.r.monthTitle.slice(0, 31), rows: mData.rows, cols: [48, 16, 16, 18], merge: 4 });
+      sheets.push({ name: 'Transactions', rows: txSheetRows(mData.r.mApproved), cols: [12, 10, 12, 24, 34, 14, 10], merge: 0 });
+      filename = `BTC-Youth-Monthly-Report-${selYm}.xlsx`;
+    } else {
+      const aData = buildAnnualSheetRows(selYear);
+      const annCols = [18, 16, 15, 15, 15, 15, 15];
+      if (aData.colCount === 13) annCols.push(14);
+      annCols.push(17, 15, 15, 15, 16);
+      sheets.push({ name: `Annual Summary ${selYear}`.slice(0, 31), rows: aData.rows, cols: annCols, merge: aData.colCount });
+
+      const yearTxs = allLive.filter(t => t.date.startsWith(selYear));
+      const monthsWithData = [...new Set(yearTxs.map(t => ymOf(t.date)))].sort();
+      monthsWithData.forEach(ym => {
+        const mData = buildMonthlySheetRows(ym);
+        if (mData) {
+          sheets.push({ name: `${mData.r.shortMonth} ${selYear}`.slice(0, 31), rows: mData.rows, cols: [48, 16, 16, 18], merge: 4 });
+        }
+      });
+      sheets.push({ name: `Transactions ${selYear}`.slice(0, 31), rows: txSheetRows(yearTxs.length ? yearTxs : allLive), cols: [12, 10, 12, 24, 34, 14, 10], merge: 0 });
+      filename = `BTC-Youth-Annual-Report-${selYear}.xlsx`;
+    }
+
+    if (typeof XLSX !== 'undefined' && XLSX.utils && XLSX.writeFile) {
+      const wb = XLSX.utils.book_new();
+      sheets.forEach(s => {
+        const cleanName = s.name.replace(/[\\/*?:[\]]/g, '-').slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, makeXlsxSheet(s.rows, s.cols, s.merge), cleanName);
+      });
+      XLSX.writeFile(wb, filename);
+      if (typeof showToast === 'function') showToast(`📊 Exported ${filename}`);
+    } else {
+      exportHtmlXlsFallback(filename, sheets);
+      if (typeof showToast === 'function') showToast(`📊 Exported Excel report`);
+    }
   };
 
   /* ---------- Backup / Restore ---------- */

@@ -606,7 +606,7 @@ window.openToolsModal = function() {
       ${canEdit ? `<button class="tool-tile" onclick="closeModal();batchOfferingsModal(getActiveMonth())"><strong>📅 Batch Month Editor</strong><small>Edit an entire month side-by-side</small></button>` : ''}
       <button class="tool-tile" onclick="closeModal();allowanceTrackerModal(getActiveMonth())"><strong>💳 Allowance Tracker</strong><small>View separated church allowance details</small></button>
       ${typeof window.dataCheck === 'function' ? `<button class="tool-tile" onclick="closeModal();window.dataCheck()"><strong>🩺 Data Check</strong><small>Find duplicates &amp; balance gaps</small></button>` : ''}
-      ${typeof window.exportExcel === 'function' ? `<button class="tool-tile" onclick="closeModal();window.exportExcel()"><strong>📊 Export to Excel</strong><small>Download .xls workbook</small></button>` : ''}
+      ${typeof window.exportExcel === 'function' ? `<button class="tool-tile" onclick="closeModal();window.exportExcel()"><strong>📊 Export to Excel</strong><small>Download .xlsx report workbook</small></button>` : ''}
       ${canEdit && typeof window.importExcelReport === 'function' ? `<button class="tool-tile" onclick="closeModal();window.importExcelReport()"><strong>📥 Import Excel Report</strong><small>Load 2026 financial report data</small></button>` : ''}
       ${isTreasurer ? `<button class="tool-tile" onclick="closeModal();catForm()"><strong>🏷️ Manage Categories</strong><small>Customize income &amp; expense labels</small></button>` : ''}
       ${typeof window.backupData === 'function' ? `<button class="tool-tile" onclick="closeModal();window.backupData()"><strong>💾 Backup Data</strong><small>Save full JSON copy</small></button>` : ''}
@@ -1808,76 +1808,267 @@ function downloadCsv(rows, filename) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; a.click();
 }
 
+function getMonthlyReportData(ym) {
+  const targetMonth = ym || reportMonth || getActiveMonth();
+  const [yStr, moStr] = targetMonth.split('-');
+  const y = parseInt(yStr, 10), mo = parseInt(moStr, 10);
+  const fridays = getFridaysForMonth(y, mo);
+  const monthTitle = new Date(y, mo - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const shortMonth = new Date(y, mo - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+  const allow = getMonthlyAllowance(targetMonth);
+  const sig = getSignatories();
+
+  const mApproved = S.transactions.filter(t => t.status !== 'void' && t.date.startsWith(targetMonth)).sort((a, b) => a.date.localeCompare(b.date));
+  const incList = mApproved.filter(t => t.type === 'income');
+  const expList = mApproved.filter(t => t.type === 'expense');
+
+  const begEntries = incList.filter(isBeginningTx);
+  let begBal = sum(begEntries);
+  if (!begEntries.length) begBal = Math.max(0, getCarriedBeginningBalance(targetMonth));
+
+  const regularInc = incList.filter(t => !begEntries.includes(t));
+  const ynEntries = regularInc.filter(t => t.category === 'Youth Night Offering');
+  const totalYN = sum(ynEntries);
+  const jfEntries = regularInc.filter(t => t.category === 'Joint Fellowship Offering');
+  const totalJF = sum(jfEntries);
+  const jfSkipReason = !totalJF ? getSkipReason('jf:' + targetMonth) : '';
+  const allocEntries = regularInc.filter(t => isAllowanceInc(t) && t.category !== 'Youth Night Offering' && t.category !== 'Joint Fellowship Offering');
+  const totalAlloc = sum(allocEntries);
+  const otherInc = regularInc.filter(t => t.category !== 'Youth Night Offering' && t.category !== 'Joint Fellowship Offering' && !allocEntries.includes(t));
+  const totalOtherInc = sum(otherInc);
+  const totalOfferings = totalYN + totalJF + totalOtherInc;
+  const totalCashOnHand = begBal + totalOfferings;
+
+  const allowExpList = expList.filter(t => isAllowanceExp(t));
+  const genExpList = expList.filter(t => !isAllowanceExp(t));
+  const totalAllowExp = sum(allowExpList);
+  const totalGenExp = sum(genExpList);
+  const netCashOnHand = totalCashOnHand - totalGenExp;
+  const yearAllow = getYearlyAllowance(y);
+
+  const fridayDatesSet = new Set(fridays.map(f => f.date));
+  const ynSlotRows = [
+    ...fridays.map(f => {
+      const matches = ynEntries.filter(t => t.date === f.date);
+      const amt = matches.length ? sum(matches) : null;
+      return { date: f.date, label: f.formatted, amount: amt, reason: amt == null ? getSkipReason(`yn:${f.date}`) : '' };
+    }),
+    ...ynEntries.filter(t => !fridayDatesSet.has(t.date)).map(t => {
+      const dObj = new Date(t.date + 'T00:00:00');
+      const dLabel = isNaN(dObj) ? t.date : `${dObj.toLocaleDateString('en-US', { month: 'short' })}. ${dObj.getDate()}`;
+      return { date: t.date, label: dLabel, amount: t.amount, reason: '' };
+    })
+  ].sort((a, b) => a.date.localeCompare(b.date));
+
+  return {
+    ym: targetMonth, y, mo, monthTitle, shortMonth,
+    begBal, begEntries, hasExplicitBeg: begEntries.length > 0,
+    ynEntries, ynSlotRows, totalYN,
+    jfEntries, totalJF, jfSkipReason,
+    allocEntries, totalAlloc,
+    otherInc, totalOtherInc,
+    totalOfferings, totalCashOnHand,
+    genExpList, totalGenExp, netCashOnHand,
+    allow, allowExpList, totalAllowExp, yearAllow,
+    combinedCash: netCashOnHand + allow.remaining,
+    mApproved, sig
+  };
+}
+window.getMonthlyReportData = getMonthlyReportData;
+
+window.printReport = function() {
+  const isAnnual = view === 'reports' && reportMode === 'annual';
+  let st = document.getElementById('btc-print-page-style');
+  if (!st) {
+    st = document.createElement('style');
+    st.id = 'btc-print-page-style';
+    document.head.appendChild(st);
+  }
+  st.textContent = isAnnual
+    ? '@page { size: landscape; margin: 8mm; }'
+    : '@page { size: portrait; margin: 10mm; }';
+
+  const prevTitle = document.title;
+  if (view === 'reports') {
+    if (isAnnual) {
+      const years = [...new Set([...S.transactions.map(t => t.date.slice(0, 4)), String(new Date().getFullYear())])].sort().reverse();
+      const y = reportYear || years[0] || String(new Date().getFullYear());
+      document.title = `BTC Youth - Annual Financial Summary ${y}`;
+    } else {
+      const rep = getMonthlyReportData(reportMonth || getActiveMonth());
+      document.title = `BTC Youth - Cash Accountability Report - ${rep.monthTitle}`;
+    }
+  }
+  const restore = () => { document.title = prevTitle; window.removeEventListener('afterprint', restore); };
+  window.addEventListener('afterprint', restore);
+  window.print();
+  setTimeout(restore, 1500);
+};
+
 function csv() {
   if (view === 'reports' && reportMode === 'annual') {
     const years = [...new Set([...S.transactions.map(t => t.date.slice(0, 4)), String(new Date().getFullYear())])].sort().reverse();
     const y = reportYear || years[0] || String(new Date().getFullYear());
     const annual = getAnnualBreakdown(y);
+    const sig = getSignatories();
+    const includeAdj = annual.showAdj || Math.abs(annual.totalAdjustments) > 0.005;
+    const hdr = ['Month', 'Beg. Youth Fund', 'Friday Offerings', 'Joint Fellowship', 'Youth Inflow', 'General Exp.', 'Youth Fund Net'];
+    if (includeAdj) hdr.push('Adjustment');
+    hdr.push('Ending Youth Fund', 'Allowance In', 'Allowance Out', 'Balance', 'Remaining');
+
     const rows = [
-      [`Tagbilaran Bible Training Ministries, Inc. - COYAP`],
-      [`Annual Cash Accountability & Net Summary Report - Year ${y}`],
-      ['Month', 'Beginning Cash', 'Friday Offerings', 'Joint Fellowship', 'Church Alloc/Allowance In', 'Total Inflows', 'Allowance Spent', 'General Expenses', 'Total Expenses', 'Monthly Net', 'Ending Cash'],
-      ...annual.months.map(m => [
-        m.fullName,
-        m.begCash.toFixed(2),
-        m.fridayOfferings.toFixed(2),
-        m.jointFellowship.toFixed(2),
-        m.allowanceIn.toFixed(2),
-        m.totalInflow.toFixed(2),
-        m.allowanceSpent.toFixed(2),
-        m.generalExpenses.toFixed(2),
-        m.totalExpenses.toFixed(2),
-        m.monthlyNet.toFixed(2),
-        m.endingCash.toFixed(2)
-      ]),
-      [
-        `TOTAL FOR THE YEAR ${y}`,
-        annual.yearStartCash.toFixed(2),
-        annual.totalFriday.toFixed(2),
-        annual.totalJF.toFixed(2),
-        annual.totalAllocIn.toFixed(2),
-        annual.totalInflowYear.toFixed(2),
-        annual.totalAllowanceSpent.toFixed(2),
-        annual.totalGeneralExpenses.toFixed(2),
-        annual.totalExpensesYear.toFixed(2),
-        annual.totalNetOfYear.toFixed(2),
-        annual.finalEndingCash.toFixed(2)
-      ],
+      ['Tagbilaran Bible Training Ministries, Inc.'],
+      ['BIBLE TRAINING CENTER - TAGBILARAN CHURCH'],
+      ['College, Youth and Professionals (COYAP)'],
+      ['ANNUAL FINANCIAL ACCOUNTABILITY & NET SUMMARY'],
+      [`For the Calendar Year ${y}`],
+      ['In Philippine Peso (PHP) - Youth General Fund & Church Allowance Separated'],
       [],
-      ['Annual Monthly Allowance Summary'],
-      ['Allowance Allocated for Year', annual.totalAllocIn.toFixed(2)],
-      ['Allowance Spent for Year', annual.totalAllowanceSpent.toFixed(2)],
-      ['Total Allowance Remaining Left', annual.allowanceLeftYear.toFixed(2)]
+      hdr,
+      ...annual.months.map(m => {
+        const r = [
+          m.fullName + (m.flagged ? ' [FLAGGED >2x Avg]' : ''),
+          m.begCash.toFixed(2),
+          m.fridayOfferings.toFixed(2),
+          m.jointFellowship.toFixed(2),
+          m.totalInflow.toFixed(2),
+          m.generalExpenses ? (-m.generalExpenses).toFixed(2) : '0.00',
+          m.monthlyNet.toFixed(2)
+        ];
+        if (includeAdj) r.push((m.adjustment || 0).toFixed(2));
+        r.push(
+          m.endingCash.toFixed(2),
+          m.allowanceIn.toFixed(2),
+          m.allowanceSpentRaw == null ? '' : Number(m.allowanceSpentRaw).toFixed(2),
+          m.allowanceLeft == null ? '' : m.allowanceLeft.toFixed(2),
+          m.allowanceRemaining.toFixed(2)
+        );
+        return r;
+      }),
+      (() => {
+        const tot = [
+          `TOTAL FOR ${y}`,
+          annual.openingBalance.toFixed(2),
+          annual.totalFriday.toFixed(2),
+          annual.totalJF.toFixed(2),
+          annual.totalInflowYear.toFixed(2),
+          annual.totalGeneralExpenses ? (-annual.totalGeneralExpenses).toFixed(2) : '0.00',
+          annual.totalNetOfYear.toFixed(2)
+        ];
+        if (includeAdj) tot.push(annual.totalAdjustments.toFixed(2));
+        tot.push(
+          annual.finalEndingCash.toFixed(2),
+          annual.totalAllocIn.toFixed(2),
+          annual.totalAllowanceSpent.toFixed(2),
+          annual.allowanceLeftYear.toFixed(2),
+          annual.allowanceLeftYear.toFixed(2)
+        );
+        return tot;
+      })()
     ];
+
+    if (annual.flags.length) {
+      rows.push([], [`Flagged Months (Expenses > 2x Avg: Avg ${annual.avgExpense.toFixed(2)}, Threshold ${annual.flagThreshold.toFixed(2)})`]);
+      rows.push(['Month', 'Expenses', 'Note']);
+      annual.flags.forEach(f => {
+        const mObj = annual.months.find(m => m.ym === f.ym) || {};
+        rows.push([f.month, f.expenses.toFixed(2), mObj.note || '']);
+      });
+    }
+    if (annual.spentUnsupported) {
+      rows.push([], [`WARNING: Monthly breakdown missing - total spent ${annual.allowanceTotals.totalSpent.toFixed(2)} is unsupported by monthly data.`]);
+    }
+    if (annual.reportedAny) {
+      rows.push([], ['Reconciliation - Reported vs Computed Beginning Balances']);
+      if (annual.recon.length) {
+        rows.push(['Month', 'Reported Beginning', 'Expected', 'Difference']);
+        annual.recon.forEach(r => rows.push([r.month, r.reported.toFixed(2), r.expected.toFixed(2), r.diff.toFixed(2)]));
+        rows.push(['Total Difference', '', '', annual.reconSummary.total.toFixed(2)]);
+      } else {
+        rows.push(['Reported beginning balances agree with the computed chain.']);
+      }
+      rows.push(['Documented Adjustments', annual.reconSummary.adjustments.toFixed(2)]);
+      rows.push(['Total Unexplained Difference', annual.reconSummary.unexplained.toFixed(2)]);
+    }
+
+    rows.push(
+      [],
+      ['Annual Net Cash Accountability', 'Amount'],
+      ['Opening Balance', annual.openingBalance.toFixed(2)],
+      [`Total Inflows for ${y}`, annual.totalInflowYear.toFixed(2)],
+      [`Total Expenses for ${y}`, annual.totalExpensesYear ? (-annual.totalExpensesYear).toFixed(2) : '0.00'],
+      ['TOTAL NET OF THE YEAR', annual.totalNetOfYear.toFixed(2)],
+      ['Closing Balance', annual.finalEndingCash.toFixed(2)],
+      [],
+      ['Monthly Allowance Status', 'Amount'],
+      ['Allowance Allocated/Received', annual.totalAllocIn.toFixed(2)],
+      ['Allowance Disbursed/Spent', annual.totalAllowanceSpent ? (-annual.totalAllowanceSpent).toFixed(2) : '0.00'],
+      ['ALLOWANCE REMAINING LEFT', annual.allowanceLeftYear.toFixed(2)],
+      [],
+      ['Signatories'],
+      ['Prepared by', sig.preparedName, sig.preparedTitle],
+      ['Noted', sig.notedName, sig.notedTitle],
+      ['Recommending Approval', sig.recommendingName, sig.recommendingTitle],
+      ['Approved by', sig.approvedName, sig.approvedTitle]
+    );
     downloadCsv(rows, `btc-youth-annual-net-summary-${y}.csv`);
     return;
   }
 
   if (view === 'reports' && reportMode === 'monthly') {
-    const ym = reportMonth || getActiveMonth();
-    const [yStr, moStr] = ym.split('-');
-    const mLabel = new Date(+yStr, +moStr - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    const list = S.transactions.filter(t => t.status !== 'void' && t.date.startsWith(ym)).sort((a, b) => a.date.localeCompare(b.date));
-    const allow = getMonthlyAllowance(ym);
+    const r = getMonthlyReportData(reportMonth || getActiveMonth());
     const rows = [
-      [`Tagbilaran Bible Training Ministries, Inc. - COYAP`],
-      [`Monthly Cash Accountability Report - ${mLabel}`],
-      ['Date', 'Type', 'Category', 'Notes', 'Amount', 'Allowance Status'],
-      ...list.map(t => [
-        t.date,
-        t.type,
-        t.category,
-        t.notes,
-        t.amount.toFixed(2),
-        isAllowanceInc(t) ? 'Allowance Inflow' : isAllowanceExp(t) ? 'Allowance Disbursement' : 'General Fund'
-      ]),
+      ['Tagbilaran Bible Training Ministries, Inc.'],
+      ['BIBLE TRAINING CENTER - TAGBILARAN CHURCH'],
+      ['College, Youth and Professionals (COYAP)'],
+      ['Cash Accountability Report'],
+      [`As of ${r.monthTitle}`],
+      ['In Philippine Peso'],
       [],
-      ['Monthly Allowance Summary'],
-      ['Allowance Allocated', allow.allocated.toFixed(2)],
-      ['Allowance Spent', allow.spent.toFixed(2)],
-      ['Allowance Remaining Left', allow.remaining.toFixed(2)]
+      ['Line Item', 'Detail', 'Subtotal', 'Total'],
+      ['Cash on Hand - Beginning Balance', '', '', ''],
+      ['  Youth Funds from Church', '', '', ''],
+      ['  Youth Night Offerings', '', '0.00', ''],
+      ['  Beginning Balance Total', '', '', r.begBal.toFixed(2)],
+      [],
+      ['Add: Offerings', '', '', ''],
+      ['  Youth Night Offerings', '', '', ''],
+      ...r.ynSlotRows.map(s => [
+        `    ${s.label}${s.reason ? ` (${s.reason})` : ''}`,
+        s.amount != null ? s.amount.toFixed(2) : '—',
+        '',
+        ''
+      ]),
+      ['  Subtotal Youth Night Offerings', '', r.totalYN.toFixed(2), ''],
+      [`  Joint Fellowship Offerings${r.jfSkipReason ? ` (${r.jfSkipReason})` : ''}`, '', r.totalJF ? r.totalJF.toFixed(2) : '—', r.totalOfferings.toFixed(2)],
+      ...r.otherInc.map(t => [`  ${t.category} (${t.date})`, '', t.amount.toFixed(2), '']),
+      ['Total Cash on Hand (Youth General Fund)', '', '', r.totalCashOnHand.toFixed(2)],
+      [],
+      ['Less: Expenses (Youth General Fund)', '', '', ''],
+      ...(r.genExpList.length
+        ? r.genExpList.map(t => [`  ${t.category} (${t.date}${cleanNotes(t.notes) ? ' · ' + cleanNotes(t.notes) : ''})`, t.amount.toFixed(2), '', ''])
+        : [['  None recorded', '0.00', '', '']]),
+      ['Total General Fund Expenses', '', '', (-r.totalGenExp).toFixed(2)],
+      ['NET CASH ON HAND (YOUTH GENERAL FUND)', '', '', r.netCashOnHand.toFixed(2)],
+      [],
+      ['SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)', '', '', ''],
+      [`Allocation from Church Funds (${r.monthTitle})`, '', '', r.allow.allocated.toFixed(2)],
+      ['Less: Allowance Expenses', '', '', ''],
+      ...(r.allowExpList.length
+        ? r.allowExpList.map(t => [`  ${t.category} (Allowance · ${t.date}${cleanNotes(t.notes) ? ' · ' + cleanNotes(t.notes) : ''})`, t.amount.toFixed(2), '', ''])
+        : [['  None recorded', '0.00', '', '']]),
+      ['Total Allowance Expenses', '', '', (-r.allow.spent).toFixed(2)],
+      [`REMAINING ALLOWANCE BALANCE (${r.monthTitle.toUpperCase()})`, '', '', r.allow.remaining.toFixed(2)],
+      [`${r.y} Cumulative Remaining Allowance`, '', '', r.yearAllow.remaining.toFixed(2)],
+      ['Reference Combined Cash (Youth Fund + Monthly Allowance Left)', '', '', r.combinedCash.toFixed(2)],
+      [],
+      ['Signatories'],
+      ['Prepared by', r.sig.preparedName, r.sig.preparedTitle],
+      ['Noted', r.sig.notedName, r.sig.notedTitle],
+      ['Recommending Approval', r.sig.recommendingName, r.sig.recommendingTitle],
+      ['Approved by', r.sig.approvedName, r.sig.approvedTitle]
     ];
-    downloadCsv(rows, `btc-youth-monthly-report-${ym}.csv`);
+    downloadCsv(rows, `btc-youth-monthly-report-${r.ym}.csv`);
     return;
   }
 
@@ -2706,6 +2897,7 @@ const views = {
               </select>
             </label>
           `}
+          ${typeof window.exportExcel === 'function' ? `<button class="btn sm" id="excel-btn" style="background:linear-gradient(135deg,#10b981,#06b6d4)">📊 Export Excel</button>` : ''}
           <button class="btn sm ghost" id="csv-btn">⬇ Export CSV</button>
           <button class="btn sm ghost" id="print-btn">🖨 Print / Save PDF</button>
           <button class="btn sm ghost" id="edit-sig-btn">⚙️ Signatures</button>
@@ -2968,7 +3160,7 @@ const views = {
           </div>
 
           <!-- Official 4-Leader Signatory Block -->
-          <div style="margin-top:48px;display:grid;gap:36px">
+          <div class="sig-block" style="margin-top:48px;display:grid;gap:36px">
             <div style="display:flex;justify-content:space-between;gap:40px">
               <div style="flex:1;text-align:center">
                 <div style="margin-bottom:45px">Prepared by:</div>
@@ -3003,21 +3195,25 @@ const views = {
     const isNetOk = annual.totalNetOfYear >= 0;
     const showAdj = annual.showAdj;
     const sgn = n => n > 0 ? 'pos' : n < 0 ? 'neg' : '';
-    const inp = (val, handler, w) => `<input type="text" inputmode="decimal" class="annual-inp" style="width:${w || 88}px" value="${val == null ? '' : val}" placeholder="0.00" onchange="${handler}(this.value)">`;
+    const inp = (val, handler, w, printText) => `<input type="text" inputmode="decimal" class="annual-inp" style="width:${w || 88}px" value="${val == null ? '' : val}" placeholder="0.00" onchange="${handler}(this.value)"><span class="print-only-val">${esc(printText != null ? printText : (val == null || val === '' ? '—' : money(val)))}</span>`;
 
     const checkHtml = annual.check.ok ? '' : `<div class="alert" style="margin-bottom:16px">🔴 <b>Check failed:</b> closing balance ${money(annual.check.closing)} does not equal opening ${money(annual.openingBalance)} + total net ${signedMoney(annual.totalNetOfYear)} + adjustments ${signedMoney(annual.totalAdjustments)} = ${money(annual.check.expectedClosing)}.</div>`;
 
     const spentWarnHtml = annual.spentUnsupported ? `<div class="alert warn" style="margin:14px 0 0">⚠️ Monthly breakdown missing – total spent ${money(annual.allowanceTotals.totalSpent)} is unsupported by monthly data.</div>` : '';
 
-    const flagsHtml = annual.flags.length ? `<div class="alert warn" style="margin:14px 0 0">
+    const flagsHtml = annual.flags.length ? `<div class="alert warn recon-box" style="margin:14px 0 0">
         <div style="font-weight:700;margin-bottom:6px">⚠️ Flagged months — expenses above 2× the average monthly expense (average ${money(annual.avgExpense)}, threshold ${money(annual.flagThreshold)})</div>
-        ${annual.flags.map(f => `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px">
+        ${annual.flags.map(f => {
+          const fNote = (annual.months.find(m => m.ym === f.ym) || {}).note || '';
+          return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:6px">
           <span><b>${f.month}</b>: <span class="neg">${money(f.expenses)}</span></span>
-          <input type="text" class="annual-inp" style="flex:1;min-width:200px;text-align:left" placeholder="Note / category (e.g. Church project, Baptism)" value="${esc((annual.months.find(m => m.ym === f.ym) || {}).note || '')}" onchange="annualSetNote('${f.ym}',this.value)">
-        </div>`).join('')}
+          <input type="text" class="annual-inp" style="flex:1;min-width:200px;text-align:left" placeholder="Note / category (e.g. Church project, Baptism)" value="${esc(fNote)}" onchange="annualSetNote('${f.ym}',this.value)">
+          ${fNote ? `<span class="print-only-val">— ${esc(fNote)}</span>` : ''}
+        </div>`;
+        }).join('')}
       </div>` : '';
 
-    const reconHtml = annual.reportedAny ? `<div style="margin-top:22px;padding:14px 18px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.03)">
+    const reconHtml = annual.reportedAny ? `<div class="recon-box" style="margin-top:22px;padding:14px 18px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.03)">
         <div style="font-weight:700;font-size:13px;margin-bottom:4px">🧾 Reconciliation — reported vs computed beginning balances</div>
         <div class="mute" style="font-size:12px;margin-bottom:8px">Typed beginning balances are kept as “reported”. Computed beginning always equals the previous month's ending. Expected = prior reported beginning + that month's net.</div>
         ${annual.recon.length ? `<div class="annual-scroll"><table class="annual-table" style="min-width:0"><thead><tr><th>Month</th><th>Reported beginning</th><th>Expected</th><th>Difference</th></tr></thead><tbody>
@@ -3112,7 +3308,7 @@ const views = {
                     <td class="pos" style="font-weight:600">${money(m.totalInflow)}</td>
                     <td class="${m.generalExpenses ? 'neg' : ''}" style="font-weight:600">${m.generalExpenses ? '-' + money(m.generalExpenses) : money(0)}</td>
                     <td class="${sgn(m.monthlyNet)}" style="font-weight:700">${signedMoney(m.monthlyNet)}</td>
-                    ${showAdj ? `<td>${inp(m.adjustment || '', `annualSetAdj.bind(null,'${m.ym}')`, 84)}</td>` : ''}
+                    ${showAdj ? `<td>${inp(m.adjustment || '', `annualSetAdj.bind(null,'${m.ym}')`, 84, m.adjustment ? signedMoney(m.adjustment) : money(0))}</td>` : ''}
                     <td style="font-weight:600">${money(m.endingCash)}</td>
                     <td style="border-left:2px solid rgba(34,211,238,.25)">${money(m.allowanceIn)}</td>
                     <td>${inp(m.allowanceSpentRaw, `annualSetSpent.bind(null,'${m.ym}')`, 84)}</td>
@@ -3145,7 +3341,7 @@ const views = {
         ${reconHtml}
 
         <!-- Annual Summary Highlights Box -->
-        <div style="margin-top:26px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+        <div class="annual-summary-boxes" style="margin-top:26px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
           <div style="background:rgba(124,92,255,.08);padding:14px 18px;border-radius:12px;border:1px solid rgba(124,92,255,.25)">
             <div style="font-weight:700;color:var(--b);font-size:13px;margin-bottom:6px">💰 Annual Net Cash Accountability</div>
             <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px">
@@ -3184,7 +3380,7 @@ const views = {
         </div>
 
         <!-- Official 4-Leader Signatory Block -->
-        <div style="margin-top:48px;display:grid;gap:36px">
+        <div class="sig-block" style="margin-top:48px;display:grid;gap:36px">
           <div style="display:flex;justify-content:space-between;gap:40px">
             <div style="flex:1;text-align:center">
               <div style="margin-bottom:45px">Prepared by:</div>
@@ -3302,8 +3498,18 @@ function render() {
   const on = (id, ev, fn) => { const el = $(id); if (el) el[ev] = fn; };
   on('#new-event', 'onclick', () => eventForm());
   on('#new-member', 'onclick', () => memberForm());
+  on('#excel-btn', 'onclick', () => {
+    if (typeof window.exportExcel === 'function') {
+      const years = [...new Set([...S.transactions.map(t => t.date.slice(0, 4)), String(new Date().getFullYear())])].sort().reverse();
+      window.exportExcel({
+        mode: reportMode,
+        ym: reportMonth || getActiveMonth(),
+        year: reportYear || years[0] || String(new Date().getFullYear())
+      });
+    }
+  });
   on('#csv-btn', 'onclick', csv);
-  on('#print-btn', 'onclick', () => window.print());
+  on('#print-btn', 'onclick', () => window.printReport());
   on('#edit-sig-btn', 'onclick', signatoriesForm);
   on('#tools-btn', 'onclick', () => window.openToolsModal());
   on('#batch-offerings-btn', 'onclick', () => batchOfferingsModal());

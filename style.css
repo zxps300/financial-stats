@@ -98,32 +98,7 @@ svg text{fill:var(--mute);font-size:11px}
 .allowance-item small { display: block; color: var(--mute); font-size: 11px; margin-bottom: 3px; }
 .allowance-item strong { font-size: 16px; font-weight: 700; }
 
-@media print {
-  .sidebar, .topbar .actions, .toolbar, .btn, nav, .report-toggle-group, .report-ctrls { display:none!important }
-  body { background:#fff!important; color:#000!important; display:block!important; padding:0!important; margin:0!important }
-  main { padding:0!important; max-width:100%!important; margin:0!important }
-  .card, .coyap-sheet {
-    border: none!important;
-    background: #fff!important;
-    color: #000!important;
-    box-shadow: none!important;
-    page-break-inside: avoid;
-    padding: 15px 20px!important;
-    max-width: 100%!important;
-  }
-  .coyap-sheet * { color: #000!important; }
-  .coyap-sheet .border-top { border-top: 1px solid #000!important; }
-  .coyap-sheet .border-bottom { border-bottom: 1px solid #000!important; }
-  .coyap-sheet .border-double { border-bottom: 3px double #000!important; border-top: 1px solid #000!important; }
-  .coyap-sheet .sub-line { border-bottom: 1px solid #000!important; }
-  .coyap-sheet .sig-line { border-bottom: 1px solid #000!important; }
-  .annual-table th { background: #f3f4f6!important; color: #000!important; border-bottom: 1px solid #000!important; font-size: 10px!important; }
-  .annual-table td { color: #000!important; border-bottom: 1px solid #e5e7eb!important; font-size: 10px!important; padding: 4px 3px!important; }
-  .annual-table tr.tot-row td { background: #f9fafb!important; border-top: 1px solid #000!important; border-bottom: 3px double #000!important; }
-  .allowance-card, .allowance-item { background: #fff!important; border: 1px solid #ccc!important; color: #000!important; }
-  th, td, .mute, h2, h3, div, span, b, strong { color:#000!important; }
-  table { border-collapse: collapse; width: 100%; }
-}
+.print-only-val { display: none; }
 .auth form{display:grid;gap:12px}.auth label{font-size:13px;color:var(--mute);display:grid;gap:4px}.user{color:var(--text);font-weight:600}.user small{display:block;color:var(--mute);font-weight:400;text-transform:capitalize}#auth-wrap{background:rgba(11,15,30,.92)}
 
 /* Fund Selection Tiles & Church Allocation styles */
@@ -600,11 +575,6 @@ svg text{fill:var(--mute);font-size:11px}
 .annual-inp { padding: 4px 8px; font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; border-radius: 8px; }
 .annual-flag { cursor: help; }
 @media (max-width: 800px) { .coyap-sheet.annual-sheet { padding: 18px 12px; } .annual-toolbar { flex-wrap: wrap; } }
-@media print {
-  .annual-table { min-width: 0; }
-  .annual-table th:first-child, .annual-table td:first-child { position: static; background: transparent !important; }
-  .annual-inp { border: 0; background: transparent !important; color: #000 !important; padding: 0; }
-}
 
 /* Mobile-friendly polish (phones & narrow screens) */
 @media (max-width: 760px) {
@@ -957,4 +927,173 @@ svg text{fill:var(--mute);font-size:11px}
 }
 @media (max-width: 760px) {
   .ms-rcpt-pick { min-height: 44px; font-size: 13px; width: 100%; }
+}
+
+/* =====================================================================
+   PRINT / SAVE PDF — Matches on-screen Monthly & Annual Reports 1-to-1
+   (Placed at the end so it cleanly overrides both desktop & mobile CSS)
+   ===================================================================== */
+@media print {
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  .sidebar, .topbar, .topbar .actions, .toolbar, .btn, nav, nav#nav,
+  .report-toggle-group, .report-ctrls, .annual-toolbar, .fab, .ms-toast,
+  #auth-wrap, .modal-wrap { display: none !important; }
+
+  html, body {
+    background: #fff !important;
+    color: #111827 !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    overflow: visible !important;
+  }
+  main {
+    padding: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+  }
+  .card, .coyap-sheet, .coyap-sheet.annual-sheet {
+    border: none !important;
+    background: #fff !important;
+    color: #111827 !important;
+    box-shadow: none !important;
+    padding: 8px 10px !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    border-radius: 0 !important;
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+  .coyap-sheet * { color: #111827 !important; }
+  .coyap-sheet .pos, .card.stat .pos, .allowance-card .pos { color: #047857 !important; }
+  .coyap-sheet .neg, .card.stat .neg, .allowance-card .neg { color: #b91c1c !important; }
+  .coyap-sheet .mute, .card.stat .mute, .allowance-card .mute { color: #4b5563 !important; }
+
+  .coyap-sheet .border-top { border-top: 1px solid #111827 !important; }
+  .coyap-sheet .border-bottom { border-bottom: 1px solid #111827 !important; }
+  .coyap-sheet .border-double { border-bottom: 3px double #111827 !important; border-top: 1px solid #111827 !important; }
+  .coyap-sheet .sub-line { border-bottom: 1px solid #111827 !important; }
+  .coyap-sheet .sig-line { border-bottom: 1px solid #111827 !important; }
+
+  /* Executive KPI cards (Annual Summary) in a neat 4-column print row */
+  .grid.g4 {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+    margin-bottom: 12px !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .card.stat {
+    border: 1px solid #cbd5e1 !important;
+    background: #f8fafc !important;
+    border-radius: 8px !important;
+    padding: 8px 10px !important;
+  }
+  .card.stat span { font-size: 10px !important; color: #334155 !important; }
+  .card.stat strong { font-size: 15px !important; margin-top: 2px !important; }
+  .card.stat .mute { font-size: 9px !important; }
+
+  /* Monthly Allowance Status card */
+  .allowance-card {
+    background: #f8fafc !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 8px !important;
+    padding: 10px 12px !important;
+    margin-bottom: 14px !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .allowance-box {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+  .allowance-item {
+    background: #fff !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 6px 10px !important;
+  }
+  .tag {
+    border: 1px solid #94a3b8 !important;
+    background: #f1f5f9 !important;
+    color: #111827 !important;
+  }
+
+  /* Annual Summary full table — zero horizontal clipping */
+  .annual-scroll {
+    overflow: visible !important;
+    padding-bottom: 0 !important;
+  }
+  .annual-table {
+    min-width: 0 !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  .annual-table th, .annual-table td {
+    min-width: 0 !important;
+    white-space: nowrap !important;
+    padding: 4px 4px !important;
+    font-size: 9.5px !important;
+  }
+  .annual-table th {
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+    border-top: 1px solid #334155 !important;
+    border-bottom: 1px solid #334155 !important;
+    white-space: normal !important;
+    line-height: 1.2 !important;
+  }
+  .annual-table td {
+    border-bottom: 1px solid #e2e8f0 !important;
+  }
+  .annual-table tr.tot-row td {
+    background: #f1f5f9 !important;
+    border-top: 1.5px solid #111827 !important;
+    border-bottom: 3px double #111827 !important;
+    font-size: 10px !important;
+  }
+  .annual-table th:first-child, .annual-table td:first-child {
+    position: static !important;
+    background: transparent !important;
+  }
+
+  /* Show full typed values/notes instead of clipped input boxes */
+  .annual-inp { display: none !important; }
+  .print-only-val { display: inline !important; }
+
+  /* Alerts, Reconciliation, Summary boxes, and Signatory block */
+  .alert {
+    background: #fefce8 !important;
+    border: 1px solid #ca8a04 !important;
+    color: #111827 !important;
+    padding: 8px 10px !important;
+    font-size: 10.5px !important;
+  }
+  .recon-box, .annual-summary-boxes, .sig-block {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+  .recon-box {
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+  }
+  .annual-summary-boxes {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 12px !important;
+  }
+  .annual-summary-boxes > div {
+    background: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 10px 12px !important;
+  }
+  .sig-block {
+    margin-top: 24px !important;
+    gap: 18px !important;
+  }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  table { border-collapse: collapse; width: 100%; }
 }
