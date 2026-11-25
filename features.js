@@ -65,86 +65,297 @@
       <div class="row" style="margin-top:16px"><button class="btn ghost" onclick="closeModal()">Close</button></div>`);
   };
 
-  /* ---------- Excel export (.xlsx matching on-screen Reports 1-to-1) ---------- */
-  function buildMonthlySheetRows(ym) {
+  /* ---------- Excel export (Styled .xlsx via ExcelJS matching official COYAP sheet 1-to-1) ---------- */
+  const EXCELJS_CDN = 'https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js';
+  function ensureExcelJS() {
+    if (typeof window.ExcelJS !== 'undefined') return Promise.resolve(window.ExcelJS);
+    return new Promise(resolve => {
+      const existing = document.querySelector(`script[src*="exceljs"]`);
+      if (existing && window.ExcelJS) return resolve(window.ExcelJS);
+      const s = document.createElement('script');
+      s.src = EXCELJS_CDN;
+      s.onload = () => resolve(window.ExcelJS || null);
+      s.onerror = () => resolve(null);
+      document.head.appendChild(s);
+    });
+  }
+
+  const CUR_FMT = '₱#,##0.00;-₱#,##0.00;"₱0.00"';
+  const SIGN_FMT = '+₱#,##0.00;-₱#,##0.00;"₱0.00"';
+  const C = {
+    ink: 'FF111827',
+    mute: 'FF475569',
+    teal: 'FF0284C7',
+    tealBorder: 'FF0EA5E9',
+    tealFill: 'FFF0F9FF',
+    green: 'FF059669',
+    red: 'FFDC2626',
+    line: 'FF334155',
+    lightLine: 'FFE2E8F0',
+    headFill: 'FFF1F5F9',
+    warnFill: 'FFFEFCE8',
+    warnBorder: 'FFCA8A04'
+  };
+  const F = (opts = {}) => ({ name: 'Calibri', size: opts.size || 10.5, bold: !!opts.bold, italic: !!opts.italic, color: { argb: opts.color || C.ink } });
+
+  function addStyledMonthlySheet(wb, ym, tabName) {
     const r = typeof window.getMonthlyReportData === 'function' ? window.getMonthlyReportData(ym) : null;
     if (!r) return null;
-    const rows = [
-      ['Tagbilaran Bible Training Ministries, Inc.', '', '', ''],
-      ['BIBLE TRAINING CENTER - TAGBILARAN CHURCH', '', '', ''],
-      ['College, Youth and Professionals (COYAP)', '', '', ''],
-      ['Cash Accountability Report', '', '', ''],
-      [`As of ${r.monthTitle}`, '', '', ''],
-      ['In Philippine Peso', '', '', ''],
-      ['', '', '', ''],
-      ['PARTICULARS', 'DETAIL', 'SUBTOTAL', 'TOTAL'],
-      ['Cash on Hand - Beginning Balance', '', '', ''],
-      ['  Youth Funds from Church', '', '', ''],
-      ['  Youth Night Offerings', '', 0, ''],
-      ['  Beginning Balance Total', '', '', r.begBal],
-      ['', '', '', ''],
-      ['Add: Offerings', '', '', ''],
-      ['  Youth Night Offerings', '', '', '']
-    ];
+    const cleanTab = (tabName || r.monthTitle).replace(/[\\/*?:[\]]/g, '-').slice(0, 31);
+    const ws = wb.addWorksheet(cleanTab, {
+      views: [{ showGridLines: false }],
+      pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 1, horizontalCentered: true, margins: { left: 0.45, right: 0.45, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 } }
+    });
+    ws.columns = [{ width: 48 }, { width: 15 }, { width: 15 }, { width: 17 }];
+
+    let rowIdx = 1;
+    const putMergedHeader = (text, fontOpts, height) => {
+      const row = ws.getRow(rowIdx);
+      ws.mergeCells(rowIdx, 1, rowIdx, 4);
+      const cell = row.getCell(1);
+      cell.value = text;
+      cell.font = F(fontOpts);
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      if (height) row.height = height;
+      rowIdx++;
+    };
+
+    // Official COYAP 6-line Header
+    putMergedHeader('Tagbilaran Bible Training Ministries, Inc.', { size: 10.5 }, 17);
+    putMergedHeader('BIBLE TRAINING CENTER - TAGBILARAN CHURCH', { size: 13.5, bold: true }, 21);
+    putMergedHeader('College, Youth and Professionals (COYAP)', { size: 11, bold: true }, 18);
+    putMergedHeader('Cash Accountability Report', { size: 12.5, bold: true }, 22);
+    putMergedHeader(`As of ${r.monthTitle}`, { size: 10.5, bold: true }, 17);
+    putMergedHeader('In Philippine Peso', { size: 9.5, italic: true, color: C.mute }, 16);
+    ws.getRow(rowIdx++).height = 10;
+
+    // Beginning Balance
+    const addLine = (a, b, c, d, opts = {}) => {
+      const row = ws.getRow(rowIdx);
+      const vals = [a, b, c, d];
+      vals.forEach((v, i) => {
+        if (v !== '' && v != null) {
+          const cell = row.getCell(i + 1);
+          cell.value = v;
+          if (typeof v === 'number') {
+            cell.numFmt = opts.numFmt || CUR_FMT;
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          } else {
+            cell.alignment = { horizontal: i === 0 ? 'left' : 'right', vertical: 'middle', wrapText: i === 0 };
+          }
+          cell.font = F(opts.font || {});
+        }
+      });
+      if (opts.aFont) row.getCell(1).font = F(opts.aFont);
+      if (opts.bFont) row.getCell(2).font = F(opts.bFont);
+      if (opts.cFont) row.getCell(3).font = F(opts.cFont);
+      if (opts.dFont) row.getCell(4).font = F(opts.dFont);
+      if (opts.cBorder) row.getCell(3).border = opts.cBorder;
+      if (opts.dBorder) row.getCell(4).border = opts.dBorder;
+      if (opts.height) row.height = opts.height;
+      return rowIdx++;
+    };
+
+    addLine('Cash on Hand - Beginning Balance', '', '', '', { aFont: { bold: true }, height: 19 });
+    addLine('    Youth Funds from Church', '', '', '', { height: 17 });
+    addLine('    Youth Night Offerings', '', 0, '', { numFmt: '#,##0.00', height: 17 });
+    addLine('', '', '', r.begBal, {
+      dFont: { bold: true },
+      cBorder: { bottom: { style: 'thin', color: { argb: C.line } } },
+      height: 18
+    });
+    ws.getRow(rowIdx++).height = 8;
+
+    // Add: Offerings
+    addLine('Add: Offerings', '', '', '', { aFont: { bold: true, color: C.teal }, height: 19 });
+    addLine('    Youth Night Offerings', '', '', '', { aFont: { bold: true }, height: 18 });
     r.ynSlotRows.forEach(s => {
-      rows.push([
-        `    ${s.label}${s.reason ? ` (${s.reason})` : ''}`,
-        s.amount != null ? s.amount : '—',
-        '',
-        ''
-      ]);
+      const label = `        ${s.label}${s.reason ? ` (${s.reason})` : ''}`;
+      addLine(label, s.amount != null ? s.amount : '—', '', '', {
+        bFont: s.amount == null ? { color: C.mute } : {},
+        height: 17
+      });
     });
-    rows.push(['  Subtotal Youth Night Offerings', '', r.totalYN, '']);
-    rows.push([
-      `  Joint Fellowship Offerings${r.jfSkipReason ? ` (${r.jfSkipReason})` : ''}`,
-      '',
-      r.totalJF ? r.totalJF : '—',
-      r.totalOfferings
-    ]);
+    addLine('', '', r.totalYN, '', {
+      cFont: { bold: true },
+      cBorder: { top: { style: 'thin', color: { argb: C.line } }, bottom: { style: 'thin', color: { argb: C.line } } },
+      height: 18
+    });
+    addLine(`    Joint Fellowship Offerings${r.jfSkipReason ? ` (${r.jfSkipReason})` : ''}`, '', r.totalJF ? r.totalJF : '—', r.totalOfferings, {
+      cFont: r.totalJF ? {} : { color: C.mute },
+      dFont: { bold: true },
+      dBorder: { bottom: { style: 'thin', color: { argb: C.line } } },
+      height: 18
+    });
     r.otherInc.forEach(t => {
-      rows.push([`  ${t.category} (${t.date})`, '', t.amount, '']);
+      addLine(`    ${t.category} (${t.date})`, '', t.amount, '', { height: 17 });
     });
-    rows.push(['Total Cash on Hand (Youth General Fund)', '', '', r.totalCashOnHand]);
-    rows.push(['', '', '', '']);
-    rows.push(['Less: Expenses (Youth General Fund)', '', '', '']);
+
+    // Total Cash on Hand
+    addLine('Total Cash on Hand (Youth General Fund)', '', '', r.totalCashOnHand, {
+      aFont: { bold: true },
+      dFont: { bold: true, size: 11 },
+      dBorder: { top: { style: 'thin', color: { argb: C.line } } },
+      height: 21
+    });
+    ws.getRow(rowIdx++).height = 6;
+
+    // Less: General Fund Expenses
+    addLine('Less: Expenses (Youth General Fund)', '', '', '', { aFont: { bold: true, color: C.red }, height: 19 });
     if (r.genExpList.length) {
       r.genExpList.forEach(t => {
         const noteStr = cleanNotes(t.notes);
-        const rcpt = t.receipt ? ' [Receipt]' : '';
-        rows.push([`    ${t.category} (${t.date}${noteStr ? ' · ' + noteStr : ''})${rcpt}`, t.amount, '', '']);
+        const label = `        ${t.category} (${t.date}${noteStr ? ' · ' + noteStr : ''})`;
+        addLine(label, t.amount, '', '', { height: label.length > 52 ? 28 : 18 });
       });
     } else {
-      rows.push(['    None recorded', 0, '', '']);
+      addLine('        None recorded', 0, '', '', { aFont: { color: C.mute }, bFont: { color: C.mute }, numFmt: '#,##0.00', height: 17 });
     }
-    rows.push(['  Total General Fund Expenses', '', '', -r.totalGenExp]);
-    rows.push(['NET CASH ON HAND (YOUTH GENERAL FUND)', '', '', r.netCashOnHand]);
-    rows.push(['', '', '', '']);
-    rows.push(['SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)', '', '', '']);
-    rows.push([`Allocation from Church Funds (${r.monthTitle})`, '', '', r.allow.allocated]);
-    rows.push(['Less: Allowance Expenses', '', '', '']);
+    addLine('    Total General Fund Expenses', '', '', -r.totalGenExp, {
+      aFont: { bold: true },
+      dFont: { bold: true, color: C.red },
+      dBorder: { bottom: { style: 'thin', color: { argb: C.line } } },
+      height: 19
+    });
+
+    // NET CASH ON HAND
+    addLine('NET CASH ON HAND (YOUTH GENERAL FUND)', '', '', r.netCashOnHand, {
+      aFont: { bold: true, size: 11 },
+      dFont: { bold: true, size: 11.5, color: r.netCashOnHand < 0 ? C.red : C.green },
+      dBorder: { top: { style: 'thin', color: { argb: C.ink } }, bottom: { style: 'double', color: { argb: C.ink } } },
+      height: 23
+    });
+    ws.getRow(rowIdx++).height = 12;
+
+    // SEPARATED STATEMENT: MONTHLY ALLOWANCE (Framed Box!)
+    const boxStart = rowIdx;
+    ws.mergeCells(rowIdx, 1, rowIdx, 4);
+    const sepTitleRow = ws.getRow(rowIdx);
+    sepTitleRow.getCell(1).value = 'SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)';
+    sepTitleRow.getCell(1).font = F({ bold: true, size: 10.5, color: C.teal });
+    sepTitleRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+    sepTitleRow.height = 22;
+    rowIdx++;
+
+    addLine(`Allocation from Church Funds (${r.monthTitle})`, '', '', r.allow.allocated, {
+      aFont: { bold: true },
+      dFont: { bold: true, color: C.green },
+      height: 19
+    });
+    addLine('Less: Allowance Expenses', '', '', '', { aFont: { bold: true, color: C.red }, height: 18 });
     if (r.allowExpList.length) {
       r.allowExpList.forEach(t => {
         const noteStr = cleanNotes(t.notes);
-        const rcpt = t.receipt ? ' [Receipt]' : '';
-        rows.push([`    ${t.category} (Allowance · ${t.date}${noteStr ? ' · ' + noteStr : ''})${rcpt}`, t.amount, '', '']);
+        const label = `        ${t.category} (Allowance · ${t.date}${noteStr ? ' · ' + noteStr : ''})`;
+        addLine(label, t.amount, '', '', { height: label.length > 52 ? 28 : 18 });
       });
     } else {
-      rows.push(['    None recorded', 0, '', '']);
+      addLine('        None recorded', 0, '', '', { aFont: { color: C.mute }, bFont: { color: C.mute }, numFmt: '#,##0.00', height: 17 });
     }
-    rows.push(['  Total Allowance Expenses', '', '', -r.allow.spent]);
-    rows.push([`REMAINING ALLOWANCE BALANCE (${r.monthTitle.toUpperCase()})`, '', '', r.allow.remaining]);
-    rows.push([`${r.y} Cumulative Remaining Allowance`, '', '', r.yearAllow.remaining]);
-    rows.push(['Reference Combined Cash (Youth Fund + Monthly Allowance Left)', '', '', r.combinedCash]);
-    rows.push(['', '', '', '']);
-    rows.push(['Prepared by:', r.sig.preparedName, 'Noted:', r.sig.notedName]);
-    rows.push(['', r.sig.preparedTitle, '', r.sig.notedTitle]);
-    rows.push(['', '', '', '']);
-    rows.push(['Recommending Approval:', r.sig.recommendingName, 'Approved by:', r.sig.approvedName]);
-    rows.push(['', r.sig.recommendingTitle, '', r.sig.approvedTitle]);
-    return { r, rows };
+    addLine('    Total Allowance Expenses', '', '', -r.allow.spent, {
+      aFont: { bold: true },
+      dFont: { bold: true, color: C.red },
+      dBorder: { bottom: { style: 'thin', color: { argb: C.line } } },
+      height: 19
+    });
+    addLine(`REMAINING ALLOWANCE BALANCE (${r.monthTitle.toUpperCase()})`, '', '', r.allow.remaining, {
+      aFont: { bold: true, size: 10.5 },
+      dFont: { bold: true, size: 11, color: r.allow.remaining >= 0 ? C.teal : C.red },
+      dBorder: { top: { style: 'thin', color: { argb: C.ink } }, bottom: { style: 'double', color: { argb: C.ink } } },
+      height: 22
+    });
+    ws.mergeCells(rowIdx, 1, rowIdx, 4);
+    const footRow = ws.getRow(rowIdx);
+    footRow.getCell(1).value = `${r.y} Cumulative Remaining Allowance: ${peso(r.yearAllow.remaining)}   |   Reference Combined Cash (Youth Fund + Monthly Allowance Left): ${peso(r.combinedCash)}`;
+    footRow.getCell(1).font = F({ size: 9, color: C.mute });
+    footRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+    footRow.height = 20;
+    const boxEnd = rowIdx;
+    rowIdx++;
+
+    // Apply light cyan fill & outer teal frame to the Separated Statement box
+    for (let rr = boxStart; rr <= boxEnd; rr++) {
+      for (let cc = 1; cc <= 4; cc++) {
+        const cell = ws.getRow(rr).getCell(cc);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.tealFill } };
+        const b = Object.assign({}, cell.border || {});
+        if (rr === boxStart) b.top = { style: 'thin', color: { argb: C.tealBorder } };
+        if (rr === boxEnd) b.bottom = { style: 'thin', color: { argb: C.tealBorder } };
+        if (cc === 1) b.left = { style: 'thin', color: { argb: C.tealBorder } };
+        if (cc === 4) b.right = { style: 'thin', color: { argb: C.tealBorder } };
+        cell.border = b;
+      }
+    }
+
+    // Official 4-Leader Signatory Block (exact visual match to screenshot!)
+    ws.getRow(rowIdx++).height = 16;
+
+    // Prepared by (left) & Noted (right)
+    ws.mergeCells(rowIdx, 1, rowIdx, 2);
+    ws.mergeCells(rowIdx, 3, rowIdx, 4);
+    ws.getRow(rowIdx).getCell(1).value = 'Prepared by:';
+    ws.getRow(rowIdx).getCell(1).font = F({ size: 10 });
+    ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(rowIdx).getCell(3).value = 'Noted:';
+    ws.getRow(rowIdx).getCell(3).font = F({ size: 10 });
+    ws.getRow(rowIdx).getCell(3).alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(rowIdx++).height = 18;
+    ws.getRow(rowIdx++).height = 26; // space for signature
+
+    ws.mergeCells(rowIdx, 1, rowIdx, 2);
+    ws.mergeCells(rowIdx, 3, rowIdx, 4);
+    ws.getRow(rowIdx).getCell(1).value = r.sig.preparedName;
+    ws.getRow(rowIdx).getCell(1).font = F({ bold: true, size: 10.5 });
+    ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center', vertical: 'bottom' };
+    ws.getRow(rowIdx).getCell(1).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx).getCell(2).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx).getCell(3).value = r.sig.notedName;
+    ws.getRow(rowIdx).getCell(3).font = F({ bold: true, size: 10.5 });
+    ws.getRow(rowIdx).getCell(3).alignment = { horizontal: 'center', vertical: 'bottom' };
+    ws.getRow(rowIdx).getCell(3).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx).getCell(4).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx++).height = 19;
+
+    ws.mergeCells(rowIdx, 1, rowIdx, 2);
+    ws.mergeCells(rowIdx, 3, rowIdx, 4);
+    ws.getRow(rowIdx).getCell(1).value = r.sig.preparedTitle;
+    ws.getRow(rowIdx).getCell(1).font = F({ size: 9.5, color: C.mute });
+    ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center', vertical: 'top' };
+    ws.getRow(rowIdx).getCell(3).value = r.sig.notedTitle;
+    ws.getRow(rowIdx).getCell(3).font = F({ size: 9.5, color: C.mute });
+    ws.getRow(rowIdx).getCell(3).alignment = { horizontal: 'center', vertical: 'top' };
+    ws.getRow(rowIdx++).height = 18;
+
+    const addCenteredSig = (label, name, title) => {
+      ws.getRow(rowIdx++).height = 10;
+      ws.mergeCells(rowIdx, 1, rowIdx, 4);
+      ws.getRow(rowIdx).getCell(1).value = label;
+      ws.getRow(rowIdx).getCell(1).font = F({ size: 10 });
+      ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      ws.getRow(rowIdx++).height = 18;
+      ws.getRow(rowIdx++).height = 26;
+
+      ws.mergeCells(rowIdx, 2, rowIdx, 3);
+      ws.getRow(rowIdx).getCell(2).value = name;
+      ws.getRow(rowIdx).getCell(2).font = F({ bold: true, size: 10.5 });
+      ws.getRow(rowIdx).getCell(2).alignment = { horizontal: 'center', vertical: 'bottom' };
+      ws.getRow(rowIdx).getCell(2).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+      ws.getRow(rowIdx).getCell(3).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+      ws.getRow(rowIdx++).height = 19;
+
+      ws.mergeCells(rowIdx, 2, rowIdx, 3);
+      ws.getRow(rowIdx).getCell(2).value = title;
+      ws.getRow(rowIdx).getCell(2).font = F({ size: 9.5, color: C.mute });
+      ws.getRow(rowIdx).getCell(2).alignment = { horizontal: 'center', vertical: 'top' };
+      ws.getRow(rowIdx++).height = 18;
+    };
+
+    addCenteredSig('Recommending Approval', r.sig.recommendingName, r.sig.recommendingTitle);
+    addCenteredSig('Approved by:', r.sig.approvedName, r.sig.approvedTitle);
+    return r;
   }
 
-  function buildAnnualSheetRows(selYear) {
+  function addStyledAnnualSheet(wb, selYear) {
     const annual = getAnnualBreakdown(selYear);
     const sig = getSignatories();
     const includeAdj = annual.showAdj || Math.abs(annual.totalAdjustments) > 0.005;
@@ -152,203 +363,401 @@
     if (includeAdj) hdr.push('Adjustment');
     hdr.push('Ending Youth Fund', 'Allowance In', 'Allowance Out', 'Balance', 'Remaining');
     const colCount = hdr.length;
-    const pad = arr => { while (arr.length < colCount) arr.push(''); return arr; };
+    const allowStartCol = includeAdj ? 10 : 9;
 
-    const rows = [
-      pad(['Tagbilaran Bible Training Ministries, Inc.']),
-      pad(['BIBLE TRAINING CENTER - TAGBILARAN CHURCH']),
-      pad(['College, Youth and Professionals (COYAP)']),
-      pad(['ANNUAL FINANCIAL ACCOUNTABILITY & NET SUMMARY']),
-      pad([`For the Calendar Year ${selYear}`]),
-      pad(['In Philippine Peso (PHP) · Youth General Fund & Church Allowance Separated']),
-      pad([]),
-      pad(['KEY METRICS', 'Youth Offerings Inflow', annual.totalInflowYear, 'General Fund Expenses', annual.totalExpensesYear, 'TOTAL NET OF THE YEAR', annual.totalNetOfYear, 'Closing Balance', annual.finalEndingCash, 'Remaining Allowance', annual.allowanceLeftYear]),
-      pad([]),
-      hdr
-    ];
+    const ws = wb.addWorksheet(`Annual Summary ${selYear}`.slice(0, 31), {
+      views: [{ showGridLines: false }],
+      pageSetup: { paperSize: 1, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true, margins: { left: 0.35, right: 0.35, top: 0.35, bottom: 0.35, header: 0.2, footer: 0.2 } }
+    });
+    const widths = [15, 14, 13, 13, 14, 14, 14];
+    if (includeAdj) widths.push(13);
+    widths.push(15, 13, 13, 13, 14);
+    ws.columns = widths.map(w => ({ width: w }));
 
+    let rowIdx = 1;
+    const putHeader = (text, fontOpts, height) => {
+      const row = ws.getRow(rowIdx);
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      row.getCell(1).value = text;
+      row.getCell(1).font = F(fontOpts);
+      row.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+      if (height) row.height = height;
+      rowIdx++;
+    };
+
+    putHeader('Tagbilaran Bible Training Ministries, Inc.', { size: 10.5 }, 16);
+    putHeader('BIBLE TRAINING CENTER - TAGBILARAN CHURCH', { size: 13.5, bold: true }, 20);
+    putHeader('College, Youth and Professionals (COYAP)', { size: 11, bold: true }, 17);
+    putHeader('ANNUAL FINANCIAL ACCOUNTABILITY & NET SUMMARY', { size: 12.5, bold: true, color: C.teal }, 21);
+    putHeader(`For the Calendar Year ${selYear}`, { size: 10.5, bold: true }, 17);
+    putHeader('In Philippine Peso (PHP) · Youth General Fund & Church Allowance Separated', { size: 9.5, italic: true, color: C.mute }, 16);
+    ws.getRow(rowIdx++).height = 8;
+
+    // Table Header
+    const hRow = ws.getRow(rowIdx);
+    hdr.forEach((h, i) => {
+      const cell = hRow.getCell(i + 1);
+      cell.value = h;
+      const isAllowCol = i + 1 >= allowStartCol;
+      cell.font = F({ bold: true, size: 9.5, color: isAllowCol ? C.teal : (h === 'Youth Inflow' ? C.green : h === 'General Exp.' ? C.red : C.ink) });
+      cell.alignment = { horizontal: i === 0 ? 'left' : 'right', vertical: 'middle', wrapText: true };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isAllowCol ? C.tealFill : C.headFill } };
+      cell.border = {
+        top: { style: 'thin', color: { argb: C.line } },
+        bottom: { style: 'thin', color: { argb: C.line } },
+        left: i + 1 === allowStartCol ? { style: 'medium', color: { argb: C.tealBorder } } : undefined
+      };
+    });
+    hRow.height = 24;
+    rowIdx++;
+
+    // 12 Month Rows
     annual.months.forEach(m => {
-      const row = [
-        m.fullName + (m.flagged ? ' ⚠' : ''),
-        m.begCash,
-        m.fridayOfferings,
-        m.jointFellowship,
-        m.totalInflow,
-        m.generalExpenses ? -m.generalExpenses : 0,
-        m.monthlyNet
-      ];
-      if (includeAdj) row.push(m.adjustment || 0);
-      row.push(
-        m.endingCash,
-        m.allowanceIn,
-        m.allowanceSpentRaw == null ? '' : Number(m.allowanceSpentRaw),
-        m.allowanceLeft == null ? '—' : m.allowanceLeft,
-        m.allowanceRemaining
-      );
-      rows.push(row);
+      const vals = [m.fullName + (m.flagged ? ' ⚠' : ''), m.begCash, m.fridayOfferings, m.jointFellowship, m.totalInflow, m.generalExpenses ? -m.generalExpenses : 0, m.monthlyNet];
+      if (includeAdj) vals.push(m.adjustment || 0);
+      vals.push(m.endingCash, m.allowanceIn, m.allowanceSpentRaw == null ? '' : Number(m.allowanceSpentRaw), m.allowanceLeft == null ? '—' : m.allowanceLeft, m.allowanceRemaining);
+      const row = ws.getRow(rowIdx);
+      vals.forEach((v, i) => {
+        const cell = row.getCell(i + 1);
+        cell.value = v;
+        const isNetCol = i === 6;
+        const isAdjCol = includeAdj && i === 7;
+        let color = C.ink;
+        if (i === 4) color = C.green;
+        if (i === 5 && m.generalExpenses) color = C.red;
+        if (isNetCol) color = m.monthlyNet > 0 ? C.green : m.monthlyNet < 0 ? C.red : C.ink;
+        if (i + 1 === colCount) color = m.allowanceRemaining < 0 ? C.red : C.teal;
+        cell.font = F({ size: 9.5, bold: i === 0 || isNetCol || i === 4 || i + 1 === colCount, color });
+        if (typeof v === 'number') {
+          cell.numFmt = (isNetCol || isAdjCol) ? SIGN_FMT : CUR_FMT;
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+        } else {
+          cell.alignment = { horizontal: i === 0 ? 'left' : 'right', vertical: 'middle' };
+        }
+        cell.border = {
+          bottom: { style: 'thin', color: { argb: C.lightLine } },
+          left: i + 1 === allowStartCol ? { style: 'medium', color: { argb: C.tealBorder } } : undefined
+        };
+      });
+      row.height = 18;
+      rowIdx++;
     });
 
-    const totRow = [
-      `TOTAL FOR ${selYear}`,
-      annual.openingBalance,
-      annual.totalFriday,
-      annual.totalJF,
-      annual.totalInflowYear,
-      annual.totalGeneralExpenses ? -annual.totalGeneralExpenses : 0,
-      annual.totalNetOfYear
-    ];
-    if (includeAdj) totRow.push(annual.totalAdjustments);
-    totRow.push(
-      annual.finalEndingCash,
-      annual.totalAllocIn,
-      annual.totalAllowanceSpent,
-      annual.allowanceLeftYear,
-      annual.allowanceLeftYear
-    );
-    rows.push(totRow);
+    // Total Row
+    const totVals = [`TOTAL FOR ${selYear}`, annual.openingBalance, annual.totalFriday, annual.totalJF, annual.totalInflowYear, annual.totalGeneralExpenses ? -annual.totalGeneralExpenses : 0, annual.totalNetOfYear];
+    if (includeAdj) totVals.push(annual.totalAdjustments);
+    totVals.push(annual.finalEndingCash, annual.totalAllocIn, annual.totalAllowanceSpent, annual.allowanceLeftYear, annual.allowanceLeftYear);
+    const tRow = ws.getRow(rowIdx);
+    totVals.forEach((v, i) => {
+      const cell = tRow.getCell(i + 1);
+      cell.value = v;
+      const isNetCol = i === 6;
+      const isAdjCol = includeAdj && i === 7;
+      let color = C.ink;
+      if (i === 0) color = C.teal;
+      if (i === 4 || i === (includeAdj ? 8 : 7)) color = C.green;
+      if (i === 5 && annual.totalGeneralExpenses) color = C.red;
+      if (isNetCol) color = annual.totalNetOfYear >= 0 ? C.green : C.red;
+      if (i + 1 === colCount) color = annual.allowanceLeftYear >= 0 ? C.teal : C.red;
+      cell.font = F({ size: 10, bold: true, color });
+      if (typeof v === 'number') {
+        cell.numFmt = (isNetCol || isAdjCol) ? SIGN_FMT : CUR_FMT;
+        cell.alignment = { horizontal: 'right', vertical: 'middle' };
+      } else {
+        cell.alignment = { horizontal: 'left', vertical: 'middle' };
+      }
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i + 1 >= allowStartCol ? C.tealFill : C.headFill } };
+      cell.border = {
+        top: { style: 'thin', color: { argb: C.ink } },
+        bottom: { style: 'double', color: { argb: C.ink } },
+        left: i + 1 === allowStartCol ? { style: 'medium', color: { argb: C.tealBorder } } : undefined
+      };
+    });
+    tRow.height = 22;
+    rowIdx++;
 
-    if (!annual.check.ok) {
-      rows.push(pad([]));
-      rows.push(pad([`CHECK FAILED: Closing balance ${peso(annual.check.closing)} != Opening ${peso(annual.openingBalance)} + Net ${peso(annual.totalNetOfYear)} + Adjustments ${peso(annual.totalAdjustments)} = ${peso(annual.check.expectedClosing)}`]));
-    }
-
+    // Flagged Months
     if (annual.flags.length) {
-      rows.push(pad([]));
-      rows.push(pad([`Flagged Months — Expenses above 2× Average Monthly Expense (Avg ${peso(annual.avgExpense)}, Threshold ${peso(annual.flagThreshold)})`]));
-      rows.push(pad(['Month', 'Expenses', 'Note / Category']));
+      ws.getRow(rowIdx++).height = 8;
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      const fr = ws.getRow(rowIdx);
+      fr.getCell(1).value = `⚠ Flagged months — expenses above 2× the average monthly expense (average ${peso(annual.avgExpense)}, threshold ${peso(annual.flagThreshold)})`;
+      fr.getCell(1).font = F({ bold: true, size: 9.5, color: C.ink });
+      fr.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.warnFill } };
+      fr.height = 19;
+      rowIdx++;
       annual.flags.forEach(f => {
-        const mObj = annual.months.find(m => m.ym === f.ym) || {};
-        rows.push(pad([f.month, f.expenses, mObj.note || '']));
+        const note = (annual.months.find(m => m.ym === f.ym) || {}).note || '';
+        ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+        const nr = ws.getRow(rowIdx);
+        nr.getCell(1).value = `   • ${f.month}: ${peso(f.expenses)}${note ? ' — ' + note : ''}`;
+        nr.getCell(1).font = F({ size: 9.5, color: C.red });
+        nr.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.warnFill } };
+        nr.height = 17;
+        rowIdx++;
       });
     }
 
     if (annual.spentUnsupported) {
-      rows.push(pad([]));
-      rows.push(pad([`WARNING: Monthly breakdown missing – total spent ${peso(annual.allowanceTotals.totalSpent)} is unsupported by monthly data.`]));
+      ws.getRow(rowIdx++).height = 6;
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      const wr = ws.getRow(rowIdx);
+      wr.getCell(1).value = `⚠ Monthly breakdown missing – total spent ${peso(annual.allowanceTotals.totalSpent)} is unsupported by monthly data.`;
+      wr.getCell(1).font = F({ bold: true, size: 9.5, color: C.ink });
+      wr.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.warnFill } };
+      wr.height = 18;
+      rowIdx++;
     }
 
+    // Reconciliation
     if (annual.reportedAny) {
-      rows.push(pad([]));
-      rows.push(pad(['Reconciliation — Reported vs Computed Beginning Balances']));
+      ws.getRow(rowIdx++).height = 10;
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      ws.getRow(rowIdx).getCell(1).value = 'Reconciliation — reported vs computed beginning balances';
+      ws.getRow(rowIdx).getCell(1).font = F({ bold: true, size: 10 });
+      ws.getRow(rowIdx++).height = 18;
       if (annual.recon.length) {
-        rows.push(pad(['Month', 'Reported Beginning', 'Expected', 'Difference']));
-        annual.recon.forEach(r => rows.push(pad([r.month, r.reported, r.expected, r.diff])));
-        rows.push(pad(['Total Difference', '', '', annual.reconSummary.total]));
-      } else {
-        rows.push(pad(['Reported beginning balances agree with the computed chain.']));
+        const rh = ws.getRow(rowIdx);
+        ['Month', 'Reported Beginning', 'Expected', 'Difference'].forEach((t, i) => {
+          rh.getCell(i + 1).value = t;
+          rh.getCell(i + 1).font = F({ bold: true, size: 9.5 });
+          rh.getCell(i + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.headFill } };
+          rh.getCell(i + 1).alignment = { horizontal: i === 0 ? 'left' : 'right', vertical: 'middle' };
+        });
+        rh.height = 18;
+        rowIdx++;
+        annual.recon.forEach(rc => {
+          const rr = ws.getRow(rowIdx);
+          [rc.month, rc.reported, rc.expected, rc.diff].forEach((v, i) => {
+            rr.getCell(i + 1).value = v;
+            rr.getCell(i + 1).font = F({ size: 9.5, bold: i === 3, color: i === 3 ? (rc.diff >= 0 ? C.green : C.red) : C.ink });
+            if (typeof v === 'number') {
+              rr.getCell(i + 1).numFmt = i === 3 ? SIGN_FMT : CUR_FMT;
+              rr.getCell(i + 1).alignment = { horizontal: 'right', vertical: 'middle' };
+            }
+          });
+          rr.height = 17;
+          rowIdx++;
+        });
+        const tr = ws.getRow(rowIdx);
+        tr.getCell(1).value = 'Total Difference';
+        tr.getCell(1).font = F({ bold: true, size: 9.5 });
+        tr.getCell(4).value = annual.reconSummary.total;
+        tr.getCell(4).numFmt = SIGN_FMT;
+        tr.getCell(4).font = F({ bold: true, size: 9.5, color: annual.reconSummary.total >= 0 ? C.green : C.red });
+        tr.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };
+        tr.height = 18;
+        rowIdx++;
       }
-      rows.push(pad(['Documented Adjustments', annual.reconSummary.adjustments, 'Total Unexplained Difference', annual.reconSummary.unexplained]));
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      ws.getRow(rowIdx).getCell(1).value = `Documented adjustments: ${signedMoney(annual.reconSummary.adjustments)}   |   Total unexplained difference: ${signedMoney(annual.reconSummary.unexplained)}`;
+      ws.getRow(rowIdx).getCell(1).font = F({ size: 9.5, color: C.mute });
+      ws.getRow(rowIdx++).height = 18;
     }
 
-    rows.push(pad([]));
-    rows.push(pad(['Annual Net Cash Accountability', 'Amount', '', 'Monthly Allowance Status', 'Amount']));
-    rows.push(pad(['Opening Balance', annual.openingBalance, '', 'Allowance Allocated / Received', annual.totalAllocIn]));
-    rows.push(pad([`Total Inflows for ${selYear}`, annual.totalInflowYear, '', 'Allowance Disbursed / Spent', annual.totalAllowanceSpent ? -annual.totalAllowanceSpent : 0]));
-    rows.push(pad([`Total Expenses for ${selYear}`, annual.totalExpensesYear ? -annual.totalExpensesYear : 0, '', 'ALLOWANCE REMAINING LEFT', annual.allowanceLeftYear]));
-    rows.push(pad(['TOTAL NET OF THE YEAR', annual.totalNetOfYear, '', annual.reportedTotalSpent != null ? 'Reported Total Spent' : '', annual.reportedTotalSpent != null ? annual.reportedTotalSpent : '']));
-    rows.push(pad(['Closing Balance', annual.finalEndingCash]));
-    rows.push(pad([]));
-    rows.push(pad(['Prepared by:', sig.preparedName, '', 'Noted:', sig.notedName]));
-    rows.push(pad(['', sig.preparedTitle, '', '', sig.notedTitle]));
-    rows.push(pad([]));
-    rows.push(pad(['Recommending Approval:', sig.recommendingName, '', 'Approved by:', sig.approvedName]));
-    rows.push(pad(['', sig.recommendingTitle, '', '', sig.approvedTitle]));
-
-    return { annual, rows, colCount };
-  }
-
-  function makeXlsxSheet(aoa, colWidths, mergeHeaderCols) {
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = colWidths.map(w => ({ wch: w }));
-    if (mergeHeaderCols > 1) {
-      ws['!merges'] = [0, 1, 2, 3, 4, 5].map(r => ({ s: { r, c: 0 }, e: { r, c: mergeHeaderCols - 1 } }));
-    }
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-    for (let R = range.s.r; R <= range.e.r; R++) {
-      for (let C = range.s.c; C <= range.e.c; C++) {
-        const cell = ws[XLSX.utils.encode_cell({ r: R, c: C })];
-        if (cell && cell.t === 'n') cell.z = '#,##0.00';
+    // Side-by-side Annual Net Cash Accountability & Monthly Allowance Status boxes
+    ws.getRow(rowIdx++).height = 10;
+    const sumStart = rowIdx;
+    const rightCol = Math.min(7, colCount - 4);
+    const putSummaryPair = (lLabel, lVal, rLabel, rVal, opts = {}) => {
+      const row = ws.getRow(rowIdx);
+      ws.mergeCells(rowIdx, 1, rowIdx, 3);
+      row.getCell(1).value = lLabel;
+      row.getCell(1).font = F(opts.lFont || { size: 9.5 });
+      if (lVal !== '' && lVal != null) {
+        row.getCell(4).value = lVal;
+        row.getCell(4).numFmt = opts.lFmt || CUR_FMT;
+        row.getCell(4).font = F(opts.lValFont || { bold: true, size: 9.5 });
+        row.getCell(4).alignment = { horizontal: 'right', vertical: 'middle' };
       }
-    }
-    return ws;
-  }
-
-  function txSheetRows(txList) {
-    return [
-      ['Date', 'Type', 'Fund', 'Category', 'Notes', 'Amount', 'Receipt'],
-      ...txList.map(t => [
-        t.date,
-        t.type,
-        (isAllowanceInc(t) || isAllowanceExp(t)) ? 'Allowance' : 'General',
-        t.category || '',
-        cleanNotes(t.notes || ''),
-        t.type === 'expense' ? -Number(t.amount) : Number(t.amount),
-        t.receipt ? 'Yes' : ''
-      ])
-    ];
-  }
-
-  function exportHtmlXlsFallback(filename, sheets) {
-    const e = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-    let h = `<html><head><meta charset="utf-8"><style>body{font-family:Calibri,Arial,sans-serif;font-size:12px}table{border-collapse:collapse;margin-bottom:20px}td,th{border:1px solid #d1d5db;padding:4px 8px}td.num{text-align:right;mso-number-format:"#,##0.00"}</style></head><body>`;
-    sheets.forEach(s => {
-      h += `<h3>${e(s.name)}</h3><table>` + s.rows.map(row =>
-        '<tr>' + row.map(v => typeof v === 'number'
-          ? `<td class="num">${v.toFixed(2)}</td>`
-          : `<td>${e(v)}</td>`
-        ).join('') + '</tr>'
-      ).join('') + '</table>';
+      if (rLabel) {
+        ws.mergeCells(rowIdx, rightCol, rowIdx, rightCol + 2);
+        row.getCell(rightCol).value = rLabel;
+        row.getCell(rightCol).font = F(opts.rFont || { size: 9.5 });
+        if (rVal !== '' && rVal != null) {
+          row.getCell(rightCol + 3).value = rVal;
+          row.getCell(rightCol + 3).numFmt = opts.rFmt || CUR_FMT;
+          row.getCell(rightCol + 3).font = F(opts.rValFont || { bold: true, size: 9.5 });
+          row.getCell(rightCol + 3).alignment = { horizontal: 'right', vertical: 'middle' };
+        }
+      }
+      row.height = 18;
+      rowIdx++;
+    };
+    putSummaryPair('Annual Net Cash Accountability', '', 'Monthly Allowance Status', '', {
+      lFont: { bold: true, color: C.teal, size: 10 },
+      rFont: { bold: true, color: C.teal, size: 10 }
     });
-    download(filename.replace(/\.xlsx$/i, '.xls'), h + '</body></html>', 'application/vnd.ms-excel');
+    putSummaryPair('Opening Balance', annual.openingBalance, 'Allowance Allocated / Received', annual.totalAllocIn);
+    putSummaryPair(`Total Inflows for ${selYear}`, annual.totalInflowYear, 'Allowance Disbursed / Spent', annual.totalAllowanceSpent ? -annual.totalAllowanceSpent : 0, {
+      rValFont: { bold: true, size: 9.5, color: C.red }
+    });
+    putSummaryPair(`Total Expenses for ${selYear}`, annual.totalExpensesYear ? -annual.totalExpensesYear : 0, 'ALLOWANCE REMAINING LEFT', annual.allowanceLeftYear, {
+      lValFont: { bold: true, size: 9.5, color: C.red },
+      rFont: { bold: true, size: 10 },
+      rValFont: { bold: true, size: 10, color: annual.allowanceLeftYear >= 0 ? C.green : C.red }
+    });
+    putSummaryPair('TOTAL NET OF THE YEAR', annual.totalNetOfYear, annual.reportedTotalSpent != null ? 'Reported Total Spent' : '', annual.reportedTotalSpent != null ? annual.reportedTotalSpent : '', {
+      lFont: { bold: true, size: 10 },
+      lValFont: { bold: true, size: 10, color: annual.totalNetOfYear >= 0 ? C.green : C.red },
+      lFmt: SIGN_FMT
+    });
+    putSummaryPair('Closing Balance', annual.finalEndingCash, '', '');
+    const sumEnd = rowIdx - 1;
+    for (let rr = sumStart; rr <= sumEnd; rr++) {
+      for (let cc = 1; cc <= 4; cc++) ws.getRow(rr).getCell(cc).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.headFill } };
+      for (let cc = rightCol; cc <= rightCol + 3; cc++) ws.getRow(rr).getCell(cc).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.tealFill } };
+    }
+
+    // 4-Leader Signatories
+    ws.getRow(rowIdx++).height = 14;
+    const mid = Math.floor(colCount / 2);
+    ws.mergeCells(rowIdx, 1, rowIdx, mid);
+    ws.mergeCells(rowIdx, mid + 1, rowIdx, colCount);
+    ws.getRow(rowIdx).getCell(1).value = 'Prepared by:';
+    ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center' };
+    ws.getRow(rowIdx).getCell(mid + 1).value = 'Noted:';
+    ws.getRow(rowIdx).getCell(mid + 1).alignment = { horizontal: 'center' };
+    ws.getRow(rowIdx++).height = 17;
+    ws.getRow(rowIdx++).height = 24;
+
+    ws.mergeCells(rowIdx, 2, rowIdx, mid - 1);
+    ws.mergeCells(rowIdx, mid + 2, rowIdx, colCount - 1);
+    ws.getRow(rowIdx).getCell(2).value = sig.preparedName;
+    ws.getRow(rowIdx).getCell(2).font = F({ bold: true });
+    ws.getRow(rowIdx).getCell(2).alignment = { horizontal: 'center' };
+    for (let c = 2; c <= mid - 1; c++) ws.getRow(rowIdx).getCell(c).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx).getCell(mid + 2).value = sig.notedName;
+    ws.getRow(rowIdx).getCell(mid + 2).font = F({ bold: true });
+    ws.getRow(rowIdx).getCell(mid + 2).alignment = { horizontal: 'center' };
+    for (let c = mid + 2; c <= colCount - 1; c++) ws.getRow(rowIdx).getCell(c).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    ws.getRow(rowIdx++).height = 18;
+
+    ws.mergeCells(rowIdx, 2, rowIdx, mid - 1);
+    ws.mergeCells(rowIdx, mid + 2, rowIdx, colCount - 1);
+    ws.getRow(rowIdx).getCell(2).value = sig.preparedTitle;
+    ws.getRow(rowIdx).getCell(2).font = F({ size: 9, color: C.mute });
+    ws.getRow(rowIdx).getCell(2).alignment = { horizontal: 'center' };
+    ws.getRow(rowIdx).getCell(mid + 2).value = sig.notedTitle;
+    ws.getRow(rowIdx).getCell(mid + 2).font = F({ size: 9, color: C.mute });
+    ws.getRow(rowIdx).getCell(mid + 2).alignment = { horizontal: 'center' };
+    ws.getRow(rowIdx++).height = 16;
+
+    const addCenterAnnSig = (label, name, title) => {
+      const c1 = Math.max(2, mid - 1), c2 = Math.min(colCount - 1, mid + 2);
+      ws.getRow(rowIdx++).height = 8;
+      ws.mergeCells(rowIdx, 1, rowIdx, colCount);
+      ws.getRow(rowIdx).getCell(1).value = label;
+      ws.getRow(rowIdx).getCell(1).alignment = { horizontal: 'center' };
+      ws.getRow(rowIdx++).height = 17;
+      ws.getRow(rowIdx++).height = 24;
+      ws.mergeCells(rowIdx, c1, rowIdx, c2);
+      ws.getRow(rowIdx).getCell(c1).value = name;
+      ws.getRow(rowIdx).getCell(c1).font = F({ bold: true });
+      ws.getRow(rowIdx).getCell(c1).alignment = { horizontal: 'center' };
+      for (let c = c1; c <= c2; c++) ws.getRow(rowIdx).getCell(c).border = { bottom: { style: 'thin', color: { argb: C.line } } };
+      ws.getRow(rowIdx++).height = 18;
+      ws.mergeCells(rowIdx, c1, rowIdx, c2);
+      ws.getRow(rowIdx).getCell(c1).value = title;
+      ws.getRow(rowIdx).getCell(c1).font = F({ size: 9, color: C.mute });
+      ws.getRow(rowIdx).getCell(c1).alignment = { horizontal: 'center' };
+      ws.getRow(rowIdx++).height = 16;
+    };
+    addCenterAnnSig('Recommending Approval', sig.recommendingName, sig.recommendingTitle);
+    addCenterAnnSig('Approved by:', sig.approvedName, sig.approvedTitle);
+    return annual;
   }
 
-  window.exportExcel = function (opts) {
+  function addTransactionsSheet(wb, name, txList) {
+    const ws = wb.addWorksheet(name.replace(/[\\/*?:[\]]/g, '-').slice(0, 31));
+    ws.columns = [{ width: 13 }, { width: 10 }, { width: 12 }, { width: 24 }, { width: 34 }, { width: 15 }, { width: 10 }];
+    const hRow = ws.addRow(['Date', 'Type', 'Fund', 'Category', 'Notes', 'Amount', 'Receipt']);
+    hRow.eachCell(c => {
+      c.font = F({ bold: true, size: 10 });
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C.headFill } };
+      c.border = { bottom: { style: 'thin', color: { argb: C.line } } };
+    });
+    txList.forEach(t => {
+      const amt = t.type === 'expense' ? -Number(t.amount) : Number(t.amount);
+      const r = ws.addRow([t.date, t.type, (isAllowanceInc(t) || isAllowanceExp(t)) ? 'Allowance' : 'General', t.category || '', cleanNotes(t.notes || ''), amt, t.receipt ? 'Yes' : '']);
+      r.getCell(6).numFmt = CUR_FMT;
+      r.getCell(6).font = F({ color: amt < 0 ? C.red : C.green });
+    });
+  }
+
+  function exportStyledHtmlFallback(filename, ym, selYear, activeMode) {
+    const e = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const sheetEl = document.querySelector('#view .coyap-sheet');
+    if (sheetEl) {
+      const html = `<html><head><meta charset="utf-8"><style>
+        body{font-family:Calibri,Arial,sans-serif;color:#111827;font-size:12px}
+        table{border-collapse:collapse;width:100%}
+        td,th{padding:4px 8px}
+        .col-detail,.col-sub,.col-total{text-align:right;mso-number-format:"₱#,##0.00"}
+        .border-top{border-top:1px solid #334155}
+        .border-bottom{border-bottom:1px solid #334155}
+        .border-double{border-top:1px solid #111827;border-bottom:3px double #111827}
+        .sig-line{border-bottom:1px solid #334155}
+        .separated-allowance-box{border:1px solid #0ea5e9;background:#f0f9ff;padding:12px}
+      </style></head><body>${sheetEl.innerHTML}</body></html>`;
+      download(filename.replace(/\.xlsx$/i, '.xls'), html, 'application/vnd.ms-excel');
+      return;
+    }
+    const r = typeof window.getMonthlyReportData === 'function' ? window.getMonthlyReportData(ym) : null;
+    download(filename.replace(/\.xlsx$/i, '.xls'), `<html><body><h3>${e(r ? r.monthTitle : selYear)}</h3></body></html>`, 'application/vnd.ms-excel');
+  }
+
+  window.exportExcel = async function (opts) {
     const allLive = live().sort((a, b) => a.date.localeCompare(b.date));
     const curYear = String(new Date().getFullYear());
     const years = [...new Set([...allLive.map(t => t.date.slice(0, 4)), curYear])].sort().reverse();
     const activeMode = (opts && opts.mode) || (typeof view !== 'undefined' && view === 'reports' && typeof reportMode !== 'undefined' ? reportMode : 'annual');
     const selYear = (opts && opts.year) || (typeof reportYear !== 'undefined' && reportYear) || years[0] || curYear;
     const selYm = (opts && opts.ym) || (typeof reportMonth !== 'undefined' && reportMonth) || (typeof getActiveMonth === 'function' ? getActiveMonth() : `${selYear}-01`);
+    const filename = activeMode === 'monthly'
+      ? `BTC-Youth-Monthly-Report-${selYm}.xlsx`
+      : `BTC-Youth-Annual-Report-${selYear}.xlsx`;
 
-    const sheets = [];
-    let filename = '';
-
-    if (activeMode === 'monthly') {
-      const mData = buildMonthlySheetRows(selYm);
-      if (!mData) return alert('Could not build monthly report.');
-      sheets.push({ name: mData.r.monthTitle.slice(0, 31), rows: mData.rows, cols: [48, 16, 16, 18], merge: 4 });
-      sheets.push({ name: 'Transactions', rows: txSheetRows(mData.r.mApproved), cols: [12, 10, 12, 24, 34, 14, 10], merge: 0 });
-      filename = `BTC-Youth-Monthly-Report-${selYm}.xlsx`;
-    } else {
-      const aData = buildAnnualSheetRows(selYear);
-      const annCols = [18, 16, 15, 15, 15, 15, 15];
-      if (aData.colCount === 13) annCols.push(14);
-      annCols.push(17, 15, 15, 15, 16);
-      sheets.push({ name: `Annual Summary ${selYear}`.slice(0, 31), rows: aData.rows, cols: annCols, merge: aData.colCount });
-
-      const yearTxs = allLive.filter(t => t.date.startsWith(selYear));
-      const monthsWithData = [...new Set(yearTxs.map(t => ymOf(t.date)))].sort();
-      monthsWithData.forEach(ym => {
-        const mData = buildMonthlySheetRows(ym);
-        if (mData) {
-          sheets.push({ name: `${mData.r.shortMonth} ${selYear}`.slice(0, 31), rows: mData.rows, cols: [48, 16, 16, 18], merge: 4 });
-        }
-      });
-      sheets.push({ name: `Transactions ${selYear}`.slice(0, 31), rows: txSheetRows(yearTxs.length ? yearTxs : allLive), cols: [12, 10, 12, 24, 34, 14, 10], merge: 0 });
-      filename = `BTC-Youth-Annual-Report-${selYear}.xlsx`;
+    const EJS = await ensureExcelJS();
+    if (!EJS || !EJS.Workbook) {
+      exportStyledHtmlFallback(filename, selYm, selYear, activeMode);
+      if (typeof showToast === 'function') showToast('📊 Exported Excel report');
+      return;
     }
 
-    if (typeof XLSX !== 'undefined' && XLSX.utils && XLSX.writeFile) {
-      const wb = XLSX.utils.book_new();
-      sheets.forEach(s => {
-        const cleanName = s.name.replace(/[\\/*?:[\]]/g, '-').slice(0, 31);
-        XLSX.utils.book_append_sheet(wb, makeXlsxSheet(s.rows, s.cols, s.merge), cleanName);
-      });
-      XLSX.writeFile(wb, filename);
+    try {
+      const wb = new EJS.Workbook();
+      wb.creator = 'BTC Youth Fund Tracker';
+      wb.created = new Date();
+
+      if (activeMode === 'monthly') {
+        const r = addStyledMonthlySheet(wb, selYm);
+        if (!r) return alert('Could not build monthly report.');
+        addTransactionsSheet(wb, 'Transactions', r.mApproved);
+      } else {
+        addStyledAnnualSheet(wb, selYear);
+        const yearTxs = allLive.filter(t => t.date.startsWith(selYear));
+        const monthsWithData = [...new Set(yearTxs.map(t => ymOf(t.date)))].sort();
+        monthsWithData.forEach(ym => {
+          const shortM = new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1).toLocaleDateString('en-US', { month: 'short' });
+          addStyledMonthlySheet(wb, ym, `${shortM} ${selYear}`);
+        });
+        addTransactionsSheet(wb, `Transactions ${selYear}`, yearTxs.length ? yearTxs : allLive);
+      }
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       if (typeof showToast === 'function') showToast(`📊 Exported ${filename}`);
-    } else {
-      exportHtmlXlsFallback(filename, sheets);
-      if (typeof showToast === 'function') showToast(`📊 Exported Excel report`);
+    } catch (err) {
+      console.error('ExcelJS export error:', err);
+      exportStyledHtmlFallback(filename, selYm, selYear, activeMode);
     }
   };
 

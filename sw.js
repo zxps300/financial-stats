@@ -1,4 +1,4 @@
-const CACHE = 'btc-youth-v25';
+const CACHE = 'btc-youth-v26';
 const SHELL = ['./', 'index.html', 'cloud.html', 'style.css', 'app-core.js', 'cloud.js', 'import-excel.js', 'features.js',
   'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 

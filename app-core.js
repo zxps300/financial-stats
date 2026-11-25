@@ -3086,7 +3086,7 @@ const views = {
 
               <!-- Add: Offerings -->
               <tr style="font-weight:600">
-                <td colspan="4" style="padding-top:16px;color:var(--b)">Add: Offerings</td>
+                <td colspan="4" class="rpt-teal" style="padding-top:16px;color:var(--b)">Add: Offerings</td>
               </tr>
               <tr style="font-weight:600">
                 <td colspan="4" style="padding-left:24px">Youth Night Offerings</td>
@@ -3113,42 +3113,42 @@ const views = {
 
               <!-- Less: General Youth Fund Expenses -->
               <tr style="font-weight:600">
-                <td colspan="4" style="padding-top:14px;color:var(--bad)">Less: Expenses (Youth General Fund)</td>
+                <td colspan="4" class="rpt-red" style="padding-top:14px;color:var(--bad)">Less: Expenses (Youth General Fund)</td>
               </tr>
               ${genExpRowsHtml}
               <tr>
                 <td colspan="3" style="padding-left:24px;font-weight:600">Total General Fund Expenses</td>
-                <td class="col-total border-bottom" style="color:var(--bad);font-weight:700">-${money(totalGenExp)}</td>
+                <td class="col-total border-bottom rpt-red" style="color:var(--bad);font-weight:700">-${money(totalGenExp)}</td>
               </tr>
 
               <!-- NET CASH ON HAND (Youth General Fund) -->
               <tr class="net-row">
                 <td colspan="3" style="padding-top:16px;font-weight:800;font-size:15px;letter-spacing:0.5px">NET CASH ON HAND (YOUTH GENERAL FUND)</td>
-                <td class="col-total border-double" style="padding-top:16px;font-size:16px;font-weight:800;color:var(--ok)">${money(netCashOnHand)}</td>
+                <td class="col-total border-double ${netCashOnHand < 0 ? 'rpt-red' : 'rpt-green'}" style="padding-top:16px;font-size:16px;font-weight:800;color:${netCashOnHand < 0 ? 'var(--bad)' : 'var(--ok)'}">${money(netCashOnHand)}</td>
               </tr>
             </tbody>
           </table>
 
           <!-- SEPARATED STATEMENT: Allocation from Church Funds (Monthly Allowance) -->
-          <div style="margin-top:28px;padding:18px 20px;border:1px solid rgba(34,211,238,.35);border-radius:12px;background:rgba(34,211,238,.05)">
-            <div style="font-weight:700;font-size:14px;color:var(--b);letter-spacing:0.4px;margin-bottom:10px">SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)</div>
+          <div class="separated-allowance-box" style="margin-top:28px;padding:18px 20px;border:1px solid rgba(34,211,238,.35);border-radius:12px;background:rgba(34,211,238,.05)">
+            <div class="sep-title" style="font-weight:700;font-size:14px;color:var(--b);letter-spacing:0.4px;margin-bottom:10px">SEPARATED STATEMENT: ALLOCATION FROM CHURCH FUNDS (MONTHLY ALLOWANCE)</div>
             <table class="sheet-table">
               <tbody>
                 <tr style="font-weight:600">
                   <td colspan="3">Allocation from Church Funds (${monthTitle})</td>
-                  <td class="col-total" style="color:var(--ok)">${money(allow.allocated)}</td>
+                  <td class="col-total rpt-green" style="color:var(--ok)">${money(allow.allocated)}</td>
                 </tr>
                 <tr style="font-weight:600">
-                  <td colspan="4" style="padding-top:8px;color:var(--bad)">Less: Allowance Expenses</td>
+                  <td colspan="4" class="rpt-red" style="padding-top:8px;color:var(--bad)">Less: Allowance Expenses</td>
                 </tr>
                 ${allowExpList.length ? allowExpRowsHtml : `<tr><td style="padding-left:48px" class="mute">None recorded</td><td class="col-detail mute">0.00</td><td class="col-sub"></td><td class="col-total"></td></tr>`}
                 <tr>
                   <td colspan="3" style="padding-left:24px;font-weight:600">Total Allowance Expenses</td>
-                  <td class="col-total border-bottom" style="color:var(--bad);font-weight:700">-${money(allow.spent)}</td>
+                  <td class="col-total border-bottom rpt-red" style="color:var(--bad);font-weight:700">-${money(allow.spent)}</td>
                 </tr>
                 <tr>
                   <td colspan="3" style="padding-top:12px;font-weight:800;font-size:14px;letter-spacing:0.4px">REMAINING ALLOWANCE BALANCE (${monthTitle.toUpperCase()})</td>
-                  <td class="col-total border-double" style="padding-top:12px;font-size:15px;font-weight:800;color:${allow.remaining >= 0 ? 'var(--b)' : 'var(--bad)'}">${money(allow.remaining)}</td>
+                  <td class="col-total border-double ${allow.remaining >= 0 ? 'rpt-teal' : 'rpt-red'}" style="padding-top:12px;font-size:15px;font-weight:800;color:${allow.remaining >= 0 ? 'var(--b)' : 'var(--bad)'}">${money(allow.remaining)}</td>
                 </tr>
                 <tr>
                   <td colspan="4" style="padding-top:10px;font-size:12px;color:var(--mute)">
@@ -3231,7 +3231,7 @@ const views = {
       ${checkHtml}
 
       <!-- Executive KPI Cards -->
-      <div class="grid g4" style="margin-bottom:20px">
+      <div class="grid g4 annual-kpi-grid" style="margin-bottom:20px">
         <div class="card stat" style="border-color:rgba(52,211,153,.35);background:linear-gradient(135deg,rgba(52,211,153,.08),rgba(34,211,238,.04))">
           <span>🏢 Youth Offerings Inflow (${selYear})</span>
           <strong class="pos">${money(annual.totalInflowYear)}</strong>
